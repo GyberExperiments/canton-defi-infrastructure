@@ -1,0 +1,312 @@
+-- | OTC Platform Tests
+-- Run with: cd canton/daml && daml test
+module Test where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import OtcTypes
+import OtcOffer
+import Collateral hiding (amount)
+
+-- | Test full OTC offer lifecycle: create → accept (full fill)
+testOfferLifecycle : Script ()
+testOfferLifecycle = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  auditor <- allocateParty "Auditor"
+
+  let now = datetime 2025 Jan 15 12 0 0
+
+  -- Create offer (Active, public — no counterparty)
+  offerCid <- submitMulti [operator, alice] [] do
+    createCmd OtcOffer with
+      offerId = "offer-001"
+      operator = operator
+      initiator = alice
+      counterparty = None
+      asset = Asset with
+        symbol = "USDC"
+        amount = 1000.0
+        chain = "Canton"
+        contractAddress = None
+      price = Price with
+        rate = 1.0
+        currency = "USD"
+      quantity = 1000.0
+      side = Buy
+      limits = VolumeLimits with
+        minAmount = 100.0
+        maxAmount = 1000.0
+      status = Active
+      timestamps = Timestamps with
+        created = now
+        updated = now
+        expiresAt = Some (datetime 2025 Feb 15 12 0 0)
+      collateral = None
+      settlementInfo = None
+      minComplianceLevel = "RETAIL"
+      allowedJurisdictions = ["US", "EU"]
+      auditors = [auditor]
+
+  -- Bob accepts (full fill). Bob needs readAs visibility to see the contract.
+  result <- submitMulti [bob] [operator] do
+    exerciseCmd offerCid Accept with
+      acceptor = bob
+      requestedQuantity = 1000.0
+      complianceOk = True
+      currentTime = datetime 2025 Jan 16 12 0 0
+      paymentProof = "0xabc123def456"
+
+  -- Verify result
+  assert (result.actualQuantity == 1000.0)
+  assert (result.actualPrice == 1.0)
+  debug "testOfferLifecycle: PASSED"
+  return ()
+
+-- | Test partial fill — accept part of offer, remainder stays active
+testPartialFill : Script ()
+testPartialFill = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let now = datetime 2025 Jan 15 12 0 0
+
+  offerCid <- submitMulti [operator, alice] [] do
+    createCmd OtcOffer with
+      offerId = "offer-002"
+      operator = operator
+      initiator = alice
+      counterparty = None
+      asset = Asset with
+        symbol = "ETH"
+        amount = 10.0
+        chain = "Canton"
+        contractAddress = None
+      price = Price with
+        rate = 2500.0
+        currency = "USD"
+      quantity = 10.0
+      side = Sell
+      limits = VolumeLimits with
+        minAmount = 1.0
+        maxAmount = 10.0
+      status = Active
+      timestamps = Timestamps with
+        created = now
+        updated = now
+        expiresAt = None
+      collateral = None
+      settlementInfo = None
+      minComplianceLevel = "RETAIL"
+      allowedJurisdictions = []
+      auditors = []
+
+  -- Partial fill (3 of 10)
+  result1 <- submitMulti [bob] [operator] do
+    exerciseCmd offerCid Accept with
+      acceptor = bob
+      requestedQuantity = 3.0
+      complianceOk = True
+      currentTime = datetime 2025 Jan 16 10 0 0
+      paymentProof = "proof-partial-1"
+
+  assert (result1.actualQuantity == 3.0)
+  debug "testPartialFill: PASSED"
+  return ()
+
+-- | Test cancel offer by initiator
+testCancelOffer : Script ()
+testCancelOffer = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+
+  let now = datetime 2025 Jan 15 12 0 0
+
+  offerCid <- submitMulti [operator, alice] [] do
+    createCmd OtcOffer with
+      offerId = "offer-003"
+      operator = operator
+      initiator = alice
+      counterparty = None
+      asset = Asset with
+        symbol = "BTC"
+        amount = 1.0
+        chain = "Canton"
+        contractAddress = None
+      price = Price with
+        rate = 45000.0
+        currency = "USD"
+      quantity = 1.0
+      side = Buy
+      limits = VolumeLimits with
+        minAmount = 0.1
+        maxAmount = 1.0
+      status = Active
+      timestamps = Timestamps with
+        created = now
+        updated = now
+        expiresAt = None
+      collateral = None
+      settlementInfo = None
+      minComplianceLevel = "RETAIL"
+      allowedJurisdictions = []
+      auditors = []
+
+  -- Cancel by initiator (alice is signatory so she can see + exercise)
+  submitMulti [alice] [operator] do
+    exerciseCmd offerCid Cancel with
+      canceller = alice
+      reason = "Changed my mind"
+      currentTime = datetime 2025 Jan 16 12 0 0
+
+  debug "testCancelOffer: PASSED"
+  return ()
+
+-- | Test collateral lifecycle: create → lock → release
+testCollateralLifecycle : Script ()
+testCollateralLifecycle = script do
+  operator <- allocateParty "Operator"
+  owner <- allocateParty "Owner"
+
+  let now = datetime 2025 Jan 15 12 0 0
+
+  -- Create collateral
+  collCid <- submitMulti [owner, operator] [] do
+    createCmd Collateral with
+      collateralId = "coll-001"
+      offerId = None
+      operator = operator
+      owner = owner
+      beneficiary = None
+      asset = Asset with
+        symbol = "USDC"
+        amount = 5000.0
+        chain = "Canton"
+        contractAddress = None
+      initialAmount = 5000.0
+      currentAmount = 5000.0
+      lockedAmount = 0.0
+      lockedUntil = None
+      status = CollateralAvailable
+      createdAt = now
+      updatedAt = now
+      auditors = []
+
+  -- Lock collateral
+  lockedCid <- submit operator do
+    exerciseCmd collCid Lock with
+      locker = operator
+      amount = 2000.0
+      lockOfferId = "offer-001"
+      lockDuration = hours 48
+      currentTime = datetime 2025 Jan 16 12 0 0
+
+  -- Release collateral
+  releasedCid <- submit operator do
+    exerciseCmd lockedCid Release with
+      releaser = operator
+      amount = 2000.0
+      currentTime = datetime 2025 Jan 17 12 0 0
+
+  debug "testCollateralLifecycle: PASSED"
+  return ()
+
+-- | Test self-trade prevention — initiator cannot accept own offer
+testSelfTradePrevention : Script ()
+testSelfTradePrevention = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+
+  let now = datetime 2025 Jan 15 12 0 0
+
+  offerCid <- submitMulti [operator, alice] [] do
+    createCmd OtcOffer with
+      offerId = "offer-004"
+      operator = operator
+      initiator = alice
+      counterparty = None
+      asset = Asset with
+        symbol = "USDC"
+        amount = 100.0
+        chain = "Canton"
+        contractAddress = None
+      price = Price with
+        rate = 1.0
+        currency = "USD"
+      quantity = 100.0
+      side = Buy
+      limits = VolumeLimits with
+        minAmount = 10.0
+        maxAmount = 100.0
+      status = Active
+      timestamps = Timestamps with
+        created = now
+        updated = now
+        expiresAt = None
+      collateral = None
+      settlementInfo = None
+      minComplianceLevel = "RETAIL"
+      allowedJurisdictions = []
+      auditors = []
+
+  -- Self-trade should fail (alice is initiator AND acceptor)
+  submitMultiMustFail [alice] [operator] do
+    exerciseCmd offerCid Accept with
+      acceptor = alice
+      requestedQuantity = 50.0
+      complianceOk = True
+      currentTime = datetime 2025 Jan 16 12 0 0
+      paymentProof = "self-trade-proof"
+
+  debug "testSelfTradePrevention: PASSED"
+  return ()
+
+-- | Test offer expiry by operator
+testOfferExpiry : Script ()
+testOfferExpiry = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+
+  let now = datetime 2025 Jan 15 12 0 0
+  let expiry = datetime 2025 Jan 20 12 0 0
+
+  offerCid <- submitMulti [operator, alice] [] do
+    createCmd OtcOffer with
+      offerId = "offer-005"
+      operator = operator
+      initiator = alice
+      counterparty = None
+      asset = Asset with
+        symbol = "USDC"
+        amount = 500.0
+        chain = "Canton"
+        contractAddress = None
+      price = Price with
+        rate = 1.0
+        currency = "USD"
+      quantity = 500.0
+      side = Buy
+      limits = VolumeLimits with
+        minAmount = 50.0
+        maxAmount = 500.0
+      status = Active
+      timestamps = Timestamps with
+        created = now
+        updated = now
+        expiresAt = Some expiry
+      collateral = None
+      settlementInfo = None
+      minComplianceLevel = "RETAIL"
+      allowedJurisdictions = []
+      auditors = []
+
+  -- Expire after deadline (operator is signatory so can see + exercise)
+  submit operator do
+    exerciseCmd offerCid Expire with
+      currentTime = datetime 2025 Jan 21 12 0 0
+
+  debug "testOfferExpiry: PASSED"
+  return ()

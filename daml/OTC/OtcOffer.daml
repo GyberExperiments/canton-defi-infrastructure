@@ -1,0 +1,277 @@
+-- | OTC Offer Contract
+-- Main template for OTC trading offers with automated settlement
+module OtcOffer where
+
+import DA.Time
+import DA.Optional
+import DA.Text as T
+import DA.Action (void, when)
+import OtcTypes
+
+-- | Main OTC Offer template
+-- Represents an offer to buy or sell an asset with specific terms
+template OtcOffer
+  with
+    -- === Identification ===
+    offerId : Text                    -- ^ Unique offer identifier (UUID)
+
+    -- === Parties ===
+    operator : Party                  -- ^ Platform operator
+    initiator : Party                 -- ^ Offer creator (maker)
+    counterparty : Optional Party     -- ^ Specific counterparty (None = public offer)
+
+    -- === Asset Details ===
+    asset : Asset                     -- ^ Asset being traded
+    price : Price                     -- ^ Price terms
+    quantity : Decimal                -- ^ Total quantity available
+
+    -- === Trading Terms ===
+    side : OtcSide                    -- ^ Buy or Sell
+    limits : VolumeLimits             -- ^ Min/max order size
+
+    -- === Status & Timing ===
+    status : OtcStatus                -- ^ Current offer status
+    timestamps : Timestamps           -- ^ Creation and expiry times
+
+    -- === Settlement ===
+    collateral : Optional CollateralInfo  -- ^ Collateral requirements
+    settlementInfo : Optional SettlementInfo  -- ^ Settlement tracking
+
+    -- === Compliance ===
+    minComplianceLevel : Text         -- ^ Required KYC level
+    allowedJurisdictions : [Text]     -- ^ Permitted jurisdictions
+
+    -- === Observers ===
+    auditors : [Party]                -- ^ Regulatory observers
+  where
+    signatory initiator, operator
+    observer (optional [] (\cp -> [cp]) counterparty) ++ auditors
+
+    -- === Contract Key ===
+    key (operator, offerId) : (Party, Text)
+    maintainer key._1
+
+    -- === Invariants ===
+    ensure
+      -- Quantity validations
+      quantity > 0.0 &&
+      limits.minAmount > 0.0 &&
+      limits.maxAmount >= limits.minAmount &&
+      limits.maxAmount <= quantity &&
+
+      -- Price validations
+      price.rate > 0.0 &&
+      asset.amount > 0.0 &&
+
+      -- ID validations
+      offerId /= "" &&
+      asset.symbol /= "" &&
+      asset.chain /= "" &&
+
+      -- Time validations
+      (case timestamps.expiresAt of
+        None -> True
+        Some expiry -> expiry > timestamps.created) &&
+
+      -- Asset amount matches quantity for consistency
+      asset.amount == quantity &&
+
+      -- Self-trade prevention: initiator cannot be the counterparty
+      (case counterparty of
+        None -> True
+        Some cp -> initiator /= cp) &&
+
+      -- Type-level invariants
+      ensureAsset asset &&
+      ensurePrice price &&
+      ensureVolumeLimits limits
+
+    -- === Choices ===
+
+    -- | Activate offer - transition from Pending to Active
+    choice Activate : ContractId OtcOffer
+      with
+        activator : Party
+        currentTime : Time
+      controller activator
+      do
+        -- Validation: Only operator can activate
+        assertMsg "Only operator can activate offers"
+          (activator == operator)
+
+        -- Validation: Must be in Pending status
+        assertMsg "Offer must be in Pending status to activate"
+          (status == Pending)
+
+        -- Create activated offer
+        create this with
+          status = Active
+          timestamps = timestamps with updated = currentTime
+
+    -- | Accept offer - counterparty accepts the offer
+    choice Accept : AcceptResult
+      with
+        acceptor : Party               -- ^ Party accepting the offer
+        requestedQuantity : Decimal    -- ^ Quantity to fill
+        complianceOk : Bool            -- ^ KYC/AML compliance check result
+        currentTime : Time             -- ^ Current timestamp
+        paymentProof : Text            -- ^ Payment proof hash
+      controller acceptor
+      do
+        -- Validation: Self-trade prevention (CRITICAL P1-16)
+        assertMsg "Cannot trade with yourself" (acceptor /= initiator)
+
+        -- Validation: Expiry check
+        case timestamps.expiresAt of
+          Some expiry -> assertMsg "Offer has expired" (currentTime <= expiry)
+          None -> return ()
+
+        -- Validation: Status must be Active (not Pending)
+        assertMsg "Offer is not active" (status == Active || status == PartiallyFilled)
+
+        -- Validation: Designated counterparty (if specified) - CHECK FIRST
+        case counterparty of
+          Some designated ->
+            assertMsg "Only designated counterparty can accept"
+              (acceptor == designated)
+          None -> return ()
+
+        -- Validation: Quantity within limits
+        assertMsg ("Requested quantity below minimum: " <> show limits.minAmount)
+          (requestedQuantity >= limits.minAmount)
+        assertMsg ("Requested quantity above maximum: " <> show limits.maxAmount)
+          (requestedQuantity <= limits.maxAmount)
+        assertMsg ("Requested quantity exceeds available: " <> show quantity)
+          (requestedQuantity <= quantity)
+
+        -- Validation: Compliance
+        assertMsg "Compliance check failed" complianceOk
+
+        -- Generate trade ID (improved - include acceptor for uniqueness)
+        let tradeId = offerId <> "-" <> partyToText acceptor <> "-" <> show currentTime
+
+        -- Generate settlement ID
+        let settlementId = offerId <> "-settlement-" <> show currentTime
+
+        -- Create settlement info
+        let newSettlement = SettlementInfo with
+              settlementId = settlementId
+              paymentProof = paymentProof
+              confirmations = 0
+              completedAt = None
+
+        -- FIX P1-19: Recalculate volume limits for partial fills
+        let remainingQuantity = quantity - requestedQuantity
+        let newMaxAmount = if remainingQuantity < limits.maxAmount
+                          then remainingQuantity
+                          else limits.maxAmount
+        let newLimits = limits with { maxAmount = newMaxAmount }
+
+        -- Calculate slippage in basis points (for AcceptResult)
+        let slippageBps = 0  -- In real implementation, calculate actual slippage
+
+        -- For partial fills, create a new offer with remaining quantity.
+        -- For full fills, the contract is already consumed by the choice exercise.
+        when (requestedQuantity /= quantity) do
+          -- Partially filled - create new offer with reduced quantity
+          void $ create this with
+            quantity = remainingQuantity
+            asset = asset with amount = remainingQuantity
+            limits = newLimits
+            status = Active
+            timestamps = timestamps with updated = currentTime
+            settlementInfo = None
+
+        -- Return accept result
+        return AcceptResult with
+          tradeId = tradeId
+          actualQuantity = requestedQuantity
+          actualPrice = price.rate
+          settlementTime = currentTime
+          settlementId = settlementId
+          slippageBps = slippageBps
+
+    -- | Cancel offer - initiator cancels their own offer
+    choice Cancel : ()
+      with
+        canceller : Party
+        reason : Text
+        currentTime : Time
+      controller canceller
+      do
+        -- Validation: Only initiator or operator can cancel
+        assertMsg "Only initiator or operator can cancel offer"
+          (canceller == initiator || canceller == operator)
+
+        -- Validation: Reason must be provided
+        assertMsg "Cancellation reason required" (reason /= "")
+
+        -- Validation: Cannot cancel if already filled
+        assertMsg "Cannot cancel filled offer" (status /= Filled)
+
+        -- Contract is consumed by the choice exercise
+        return ()
+
+    -- | Expire offer - automatic expiration
+    choice Expire : ()
+      with
+        currentTime : Time
+      controller operator
+      do
+        -- Validation: Must have expiry time
+        case timestamps.expiresAt of
+          None -> abort "Offer has no expiry time"
+          Some expiry -> do
+            -- Validation: Current time must be past expiry
+            assertMsg "Offer has not yet expired" (currentTime > expiry)
+
+            -- Contract is consumed by the choice exercise
+            return ()
+
+    -- | Settle - complete settlement after payment confirmation
+    choice Settle : ()
+      with
+        settler : Party
+        confirmationCount : Int
+        currentTime : Time
+      controller settler
+      do
+        -- Validation: Only operator can settle
+        assertMsg "Only operator can settle" (settler == operator)
+
+        -- Validation: Must have settlement info
+        case settlementInfo of
+          None -> abort "No settlement information available"
+          Some info -> do
+            -- Validation: Minimum confirmations required
+            assertMsg "Insufficient confirmations" (confirmationCount >= 2)
+
+            -- Create new contract with filled status (current one consumed by choice)
+            void $ create this with
+              status = Filled
+              settlementInfo = Some (info with
+                confirmations = confirmationCount
+                completedAt = Some currentTime)
+              timestamps = timestamps with updated = currentTime
+
+    -- | Dispute - raise a dispute
+    choice Dispute : ContractId OtcOffer
+      with
+        disputer : Party
+        reason : Text
+        currentTime : Time
+      controller disputer
+      do
+        -- Validation: Must be involved party
+        assertMsg "Only involved parties can dispute"
+          (disputer == initiator ||
+           Some disputer == counterparty ||
+           disputer == operator)
+
+        -- Validation: Reason required
+        assertMsg "Dispute reason required" (reason /= "")
+
+        -- Update status to disputed
+        create this with
+          status = Disputed
+          timestamps = timestamps with updated = currentTime
