@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-validator-nginx
+  namespace: default
+  labels:
+    app: canton-validator
+    component: nginx
+    managed-by: manual
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  # НЕ указываем selector - используем Endpoints
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: canton-validator-nginx
+  namespace: default
+  labels:
+    app: canton-validator
+    component: nginx
+    managed-by: manual
+subsets:
+- addresses:
+  # IP адрес Docker контейнера nginx (получить через диагностику)
+  # Будет автоматически обновляться скриптом update-nginx-endpoints.sh
+  # ВАЖНО: Замените на реальный IP после первого применения
+  # Получить IP: docker network inspect splice-validator_splice_validator --format '{{range .Containers}}{{if eq .Name "splice-validator-nginx-1"}}{{.IPv4Address}}{{end}}{{end}}' | cut -d'/' -f1
+  - ip: 172.18.0.7
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+
+
+
+
+

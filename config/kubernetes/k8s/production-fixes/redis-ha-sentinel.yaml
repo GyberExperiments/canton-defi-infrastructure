@@ -1,0 +1,411 @@
+# ============================================================================
+# PRODUCTION-READY REDIS WITH HIGH AVAILABILITY
+# ============================================================================
+# Архитектура: Redis Sentinel (3 master replicas + 3 sentinel)
+# - Automatic failover
+# - Persistent storage (PVC)
+# - AOF + RDB persistence
+# - Backup ready
+# ============================================================================
+
+---
+# PersistentVolumeClaim для каждой Redis реплики
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data-0
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard  # Измените на ваш storage class
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data-1
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data-2
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+# ConfigMap для Redis конфигурации
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: canton-otc
+  labels:
+    app: redis
+data:
+  redis.conf: |
+    # Persistence Configuration
+    # AOF (Append Only File) - более надежный режим
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    
+    # RDB Snapshots - backup режим
+    save 900 1      # Сохранять каждые 15 минут если была хотя бы 1 операция
+    save 300 10     # Сохранять каждые 5 минут если было 10 операций
+    save 60 10000   # Сохранять каждую минуту если было 10000 операций
+    
+    # Replication
+    replica-read-only yes
+    replica-serve-stale-data yes
+    
+    # Memory Management
+    maxmemory 450mb
+    maxmemory-policy allkeys-lru
+    
+    # Network
+    bind 0.0.0.0
+    protected-mode no
+    port 6379
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    
+    # General
+    daemonize no
+    supervised no
+    pidfile /var/run/redis_6379.pid
+    loglevel notice
+    logfile ""
+    databases 16
+    
+    # Security
+    # requirepass YOUR_REDIS_PASSWORD  # Раскомментируйте и установите пароль
+    
+    # Performance
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    
+  sentinel.conf: |
+    # Sentinel Configuration
+    port 26379
+    bind 0.0.0.0
+    
+    # Monitor master
+    sentinel monitor mymaster redis-0.redis 6379 2
+    sentinel down-after-milliseconds mymaster 5000
+    sentinel parallel-syncs mymaster 1
+    sentinel failover-timeout mymaster 10000
+    
+    # Quorum = 2 (из 3 sentinel должны согласиться для failover)
+    sentinel auth-pass mymaster YOUR_REDIS_PASSWORD
+    
+    # Scripts
+    # sentinel notification-script mymaster /path/to/notification.sh
+    # sentinel client-reconfig-script mymaster /path/to/reconfig.sh
+
+---
+# StatefulSet для Redis (3 реплики с persistent storage)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: database
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        component: database
+    spec:
+      affinity:
+        # Anti-affinity: разместить каждую реплику на разных нодах
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - redis
+            topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+      # Init container для настройки прав доступа
+      - name: init-redis
+        image: redis:7-alpine
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          # Копируем конфигурацию
+          cp /tmp/redis/redis.conf /etc/redis/redis.conf
+          # Устанавливаем права
+          chmod 644 /etc/redis/redis.conf
+          # Проверяем/создаем директории
+          mkdir -p /data/redis
+          chown -R 999:999 /data/redis
+        volumeMounts:
+        - name: redis-config
+          mountPath: /tmp/redis
+        - name: redis-data
+          mountPath: /data
+        - name: config
+          mountPath: /etc/redis
+      
+      containers:
+      # Redis container
+      - name: redis
+        image: redis:7-alpine
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        ports:
+        - containerPort: 6379
+          name: redis
+          protocol: TCP
+        
+        env:
+        - name: REDIS_REPLICATION_MODE
+          value: "master"
+        
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        - name: config
+          mountPath: /etc/redis
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        # Liveness Probe
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        # Readiness Probe
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        
+        # Security Context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          runAsGroup: 999
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      
+      # Sentinel sidecar container
+      - name: sentinel
+        image: redis:7-alpine
+        command:
+        - redis-sentinel
+        - /etc/redis/sentinel.conf
+        ports:
+        - containerPort: 26379
+          name: sentinel
+          protocol: TCP
+        
+        volumeMounts:
+        - name: redis-config
+          mountPath: /etc/redis
+        
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        
+        livenessProbe:
+          tcpSocket:
+            port: 26379
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          tcpSocket:
+            port: 26379
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-config
+      - name: config
+        emptyDir: {}
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+      labels:
+        app: redis
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 10Gi
+
+---
+# Headless Service для StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: database
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+    protocol: TCP
+  - name: sentinel
+    port: 26379
+    targetPort: 26379
+    protocol: TCP
+  selector:
+    app: redis
+
+---
+# Service для доступа к Redis Master
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: master
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    name: redis
+  selector:
+    app: redis
+
+---
+# Service для Sentinel
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: sentinel
+spec:
+  type: ClusterIP
+  ports:
+  - port: 26379
+    targetPort: 26379
+    protocol: TCP
+    name: sentinel
+  selector:
+    app: redis
+
+---
+# PodDisruptionBudget для обеспечения availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: canton-otc
+  labels:
+    app: redis
+spec:
+  minAvailable: 2  # Минимум 2 из 3 должны быть всегда доступны
+  selector:
+    matchLabels:
+      app: redis
+
+---
+# ServiceMonitor для Prometheus (если установлен)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: redis-metrics
+  namespace: canton-otc
+  labels:
+    app: redis
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  endpoints:
+  - port: redis
+    interval: 30s
+    path: /metrics
+

@@ -1,0 +1,115 @@
+# 🚀 Canton OTC Docker Ignore
+# Optimize build context and speed up Docker builds
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json.bak
+.npm/
+
+# Next.js - CRITICAL: exclude build artifacts
+.next/
+out/
+build/
+**/.next/
+**/out/
+**/build/
+
+# Production
+dist/
+
+# Environment variables  
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# CI/CD
+.github/
+Dockerfile*
+.dockerignore
+
+# Documentation
+*.md
+docs/
+
+# Testing
+coverage/
+.nyc_output
+.jest/
+**/*.test.js
+**/*.spec.js
+**/*.test.ts
+**/*.spec.ts
+__tests__/
+test/
+tests/
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Temporary folders
+tmp/
+temp/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# K8s configs (не нужны в контейнере)
+k8s/
+deployment/
+
+# Scripts  
+*.sh
+
+# Build artifacts and large files
+node_modules/
+.next/
+build/
+dist/
+out/
+*.tgz
+*.tar.gz
+
+# Additional exclusions to reduce build context
+backup-*/
+logs-*/
+system-*/
+*.log
+*.html

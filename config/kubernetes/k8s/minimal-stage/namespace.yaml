@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: canton-otc-minimal-stage
+  labels:
+    app: canton-otc
+    environment: minimal-stage

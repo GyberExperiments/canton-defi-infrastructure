@@ -1,0 +1,41 @@
+{
+  "name": "Canton OTC Fin Configuration",
+  "description": "Complete configuration for Canton Coin trading support",
+  "settings": {
+    "app_name": "Canton OTC Assistant",
+    "app_logo": "https://stage.minimal.build.infra.1otc.cc/fin-assistant-logo.svg",
+    "chat_settings": {
+      "welcome_message": "👋 Привет! Я Canton OTC Assistant, ваш AI-помощник для покупки Canton Coin (CC).",
+      "fallback_message": "Извините, я не понял ваш запрос. Пожалуйста, попробуйте еще раз.",
+      "handoff_message": "Я передаю вас живому оператору для решения вашего вопроса.",
+      "language": "ru",
+      "tone": "friendly_professional"
+    },
+    "integration_settings": {
+      "webhook_url": "https://stage.minimal.build.infra.1otc.cc/api/intercom/fin-over-api",
+      "ai_agent_url": "https://stage.minimal.build.infra.1otc.cc/api/intercom/ai-agent",
+      "webhook_secret": "intercom_webhook_secret_minimal_stage_2025",
+      "auto_reply": true,
+      "collect_user_data": true,
+      "handoff_to_human": true
+    },
+    "knowledge_base": {
+      "collection_id": "16127377",
+      "auto_suggest": true,
+      "fallback_to_ai": true
+    },
+    "order_settings": {
+      "min_amount": 1,
+      "max_amount": 100000,
+      "supported_networks": [
+        "TRON",
+        "ETHEREUM",
+        "BSC",
+        "SOLANA",
+        "OPTIMISM"
+      ],
+      "canton_price_usd": 0.21,
+      "processing_time_hours": 12
+    }
+  }
+}

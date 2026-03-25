@@ -1,0 +1,9 @@
+# DevNet overrides for participant-values.yaml
+
+disableAuth: true
+
+# K8s < 1.24: set enableHealthProbes: false if needed
+# enableHealthProbes: true
+
+nodeSelector:
+  kubernetes.io/hostname: canton-node-65-108-15-30

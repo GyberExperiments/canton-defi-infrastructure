@@ -1,0 +1,16 @@
+# Canton OTC Platform — DAML Smart Contracts
+# Sandbox: localhost:5011 | DevNet: 65.108.15.30:30757
+sdk-version: 2.9.3
+name: canton-otc
+version: 1.0.0
+source: ../canton/daml
+parties:
+  - Operator
+  - Trader1
+  - Trader2
+  - Auditor
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+build-options: []

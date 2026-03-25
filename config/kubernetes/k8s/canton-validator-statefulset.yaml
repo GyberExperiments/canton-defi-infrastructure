@@ -1,0 +1,243 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: canton-node
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: validator
+    version: "0.4.19"
+spec:
+  serviceName: canton-node
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-node
+  template:
+    metadata:
+      labels:
+        app: canton-node
+        component: validator
+        version: "0.4.19"
+    spec:
+      # Host networking для прямого доступа по IP
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      
+      # Привязка к конкретной ноде
+      nodeSelector:
+        kubernetes.io/hostname: kczdjomrqi  # IP: 45.9.41.209
+      
+      # Толерантность к taint'ам ноды
+      tolerations:
+      - key: node.kubernetes.io/disk-pressure
+        operator: Exists
+        effect: NoSchedule
+      
+      # Секреты для pull образа
+      imagePullSecrets:
+      - name: ghcr-creds
+      
+      containers:
+      - name: canton-validator
+        image: ghcr.io/themacroeconomicdao/canton-node:0.4.19
+        imagePullPolicy: Always
+        
+        # Порты
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        - name: admin
+          containerPort: 8082
+          protocol: TCP
+        - name: ledger-grpc
+          containerPort: 6865
+          protocol: TCP
+        
+        # Переменные окружения
+        env:
+        - name: CANTON_VERSION
+          value: "0.4.19"
+        - name: CANTON_API
+          value: "https://sv.sv-1.dev.global.canton.network.sync.global"
+        - name: PARTY_HINT
+          value: "gyber-validator"
+        - name: VALIDATOR_MODE
+          value: "0"  # 0=validator, 1=observer
+        
+        # Секреты
+        - name: ONBOARDING_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: canton-onboarding
+              key: ONBOARDING_SECRET
+        
+        # Ресурсы
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 1
+            memory: 4Gi
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 5
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        # Volumes для данных
+        volumeMounts:
+        - name: canton-data
+          mountPath: /opt/canton/data
+        - name: canton-logs
+          mountPath: /opt/canton/logs
+        - name: canton-config
+          mountPath: /opt/canton/config
+          readOnly: true
+        
+        # Безопасность
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      
+      # Volumes
+      volumes:
+      - name: canton-data
+        hostPath:
+          path: /var/lib/canton/data
+          type: DirectoryOrCreate
+      - name: canton-logs
+        hostPath:
+          path: /var/lib/canton/logs
+          type: DirectoryOrCreate
+      - name: canton-config
+        configMap:
+          name: canton-config
+      
+      # Restart policy
+      restartPolicy: Always
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-node
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: validator
+spec:
+  type: ClusterIP
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  - name: health
+    port: 8081
+    targetPort: 8081
+    protocol: TCP
+  - name: admin
+    port: 8082
+    targetPort: 8082
+    protocol: TCP
+  - name: ledger-grpc
+    port: 6865
+    targetPort: 6865
+    protocol: TCP
+  selector:
+    app: canton-node
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-config
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: validator
+data:
+  canton.conf: |
+    canton {
+      features.enable-preview-apis = true
+      features.enable-testing-apis = true
+      
+      monitoring {
+        metrics {
+          reporter = "prometheus"
+          port = 8080
+        }
+        
+        health-check {
+          port = 8081
+        }
+        
+        admin-api {
+          port = 8082
+        }
+      }
+      
+      storage {
+        type = "postgres"
+        config = "jdbc:postgresql://localhost:5432/canton?user=canton&password=canton"
+      }
+    }
+  
+  validator.conf: |
+    canton {
+      participants {
+        validator {
+          storage {
+            type = "memory"
+          }
+          
+          ledger-api {
+            port = 6865
+          }
+          
+          admin-api {
+            port = 8082
+          }
+          
+          monitoring {
+            metrics {
+              reporter = "prometheus"
+              port = 8080
+            }
+            
+            health-check {
+              port = 8081
+            }
+          }
+        }
+      }
+    }

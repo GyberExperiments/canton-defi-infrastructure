@@ -1,0 +1,70 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit-ddos-protection
+  namespace: canton-otc
+spec:
+  rateLimit:
+    # Защита от DDoS: максимум 100 запросов в секунду с одного IP
+    average: 100
+    period: 1s
+    burst: 200
+    # Используем IP для идентификации клиента
+    sourceCriterion:
+      ipStrategy:
+        depth: 0
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers-enhanced
+  namespace: canton-otc
+spec:
+  headers:
+    # Security headers для защиты от различных атак
+    stsSeconds: 31536000
+    stsIncludeSubdomains: true
+    stsPreload: true
+    forceSTSHeader: true
+    customRequestHeaders:
+      X-Forwarded-Proto: "https"
+    customResponseHeaders:
+      X-Content-Type-Options: "nosniff"
+      X-Frame-Options: "SAMEORIGIN"
+      X-XSS-Protection: "1; mode=block"
+      Referrer-Policy: "strict-origin-when-cross-origin"
+      Permissions-Policy: "geolocation=(), microphone=(), camera=(), payment=()"
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: ip-whitelist-monitoring
+  namespace: canton-otc
+spec:
+  # Логирование подозрительных IP для мониторинга
+  # В production можно добавить IP whitelist если нужно
+  # ipWhiteList:
+  #   sourceRange:
+  #     - "127.0.0.1/32"
+  #     - "::1/128"
+  passTLSClientCert:
+    pem: true
+    info:
+      notAfter: true
+      notBefore: true
+      sans: true
+      subject:
+        country: true
+        province: true
+        locality: true
+        organization: true
+        commonName: true
+        serialNumber: true
+      issuer:
+        country: true
+        province: true
+        locality: true
+        organization: true
+        commonName: true
+        serialNumber: true
+

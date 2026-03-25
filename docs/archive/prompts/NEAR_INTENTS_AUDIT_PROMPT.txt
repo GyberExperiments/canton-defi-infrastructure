@@ -1,0 +1,64 @@
+Проанализируй интеграцию NEAR Intents DEX в проекте и определи точные креды необходимые для production.
+
+КОНТЕКСТ:
+- Next.js 15 приложение
+- Работа напрямую со смарт-контрактами через @near-js/client (NEAR RPC)
+- GitHub Secrets → External Secrets Operator → Kubernetes Secrets (для критичных секретов)
+- ConfigMap → Kubernetes ConfigMap (для некритичных переменных, можно менять из админки)
+
+АНАЛИЗИРУЙ ФАЙЛЫ:
+1. src/app/api/near-intents/swap/route.ts
+2. src/app/api/near-intents/bridge/route.ts
+3. src/app/api/near-intents/status/[intentId]/route.ts
+4. src/lib/near-intents.ts
+5. src/components/dex/SwapInterface.tsx
+6. src/components/dex/BridgeInterface.tsx
+7. config/kubernetes/k8s/configmap.yaml
+8. config/kubernetes/k8s/minimal-stage/external-secret.yaml
+9. config/kubernetes/k8s/deployment.yaml
+
+ПРОВЕРЬ ДОКУМЕНТАЦИЮ:
+- https://docs.near-intents.org/near-intents
+- GitHub репозиторий NEAR Intents (если доступен)
+- Примеры интеграции
+
+ЗАДАЧИ:
+1. Определи какие переменные окружения используются в коде (process.env.*)
+2. Раздели на категории:
+   - КРИТИЧНЫЕ СЕКРЕТЫ (GitHub Secrets): API ключи, приватные токены
+   - НЕКРИТИЧНЫЕ (ConfigMap): публичные URLs, адреса контрактов, настройки
+3. Проверь документацию NEAR Intents и определи:
+   - Адрес смарт-контракта verifier (testnet/mainnet)
+   - Требуется ли REST API или работа только через контракты
+   - Методы контракта: create_swap_intent, create_bridge_intent, get_intent_status
+   - Формат параметров для каждого метода
+4. Сравни требования документации с нашей реализацией
+5. Определи что нужно получить от NEAR Intents
+
+ВЫВЕДИ СПИСОК:
+1. ОБЯЗАТЕЛЬНЫЕ креды от NEAR Intents:
+   - Название
+   - Где получить
+   - Куда сохранить (GitHub Secrets или ConfigMap)
+   - Обязательность
+
+2. ОПЦИОНАЛЬНЫЕ креды:
+   - Для чего
+   - Условия необходимости
+
+3. ЧТО УЖЕ НАСТРОЕНО:
+   - Публичные RPC URLs
+   - Network configuration
+   - Wallet URLs
+
+4. ИНСТРУКЦИИ:
+   - Как получить каждый обязательный кред
+   - Куда добавить в проекте
+
+ВАЖНО:
+- Будь точным на основе реального кода, не предполагай
+- Учитывай что работаем напрямую через NEAR RPC (@near-js/client)
+- Различай секреты (GitHub Secrets) и публичные данные (ConfigMap)
+- Проверь документацию NEAR Intents для актуальной информации
+
+

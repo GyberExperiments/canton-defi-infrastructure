@@ -1,0 +1,73 @@
+version: '3.8'
+services:
+  canton:
+    image: ghcr.io/themacroeconomicdao/canton-node:0.5.8
+    container_name: canton-validator
+    group_add:
+      - ${DOCKER_GID}
+    environment:
+      # Core Canton Configuration
+      - CANTON_API=${CANTON_API}
+      - SPONSOR_SV_ADDRESS=${SPONSOR_SV_ADDRESS}
+      - SCAN_ADDRESS=${SCAN_ADDRESS}
+      - ONBOARDING_SECRET=${ONBOARDING_SECRET}
+      - PARTY_HINT=${PARTY_HINT}
+      - VALIDATOR_MODE=${VALIDATOR_MODE}
+      - MIGRATION_ID=${MIGRATION_ID}
+      - PARTICIPANT_IDENTIFIER=${PARTICIPANT_IDENTIFIER}
+      
+      # Docker Image Versions (CRITICAL!)
+      - NGINX_VERSION=${NGINX_VERSION}
+      - SPLICE_POSTGRES_VERSION=${SPLICE_POSTGRES_VERSION}
+      - IMAGE_TAG=${IMAGE_TAG}
+      - IMAGE_REPO=${IMAGE_REPO}
+      
+      # Database Configuration
+      - SPLICE_DB_SERVER=${SPLICE_DB_SERVER}
+      - SPLICE_DB_USER=${SPLICE_DB_USER}
+      - SPLICE_DB_PASSWORD=${SPLICE_DB_PASSWORD}
+      - SPLICE_DB_PORT=${SPLICE_DB_PORT}
+      
+      # Docker Network
+      - DOCKER_NETWORK=${DOCKER_NETWORK}
+      
+      # Auth Configuration (Optional)
+      - AUTH_WELLKNOWN_URL=${AUTH_WELLKNOWN_URL}
+      - AUTH_JWKS_URL=${AUTH_JWKS_URL}
+      - AUTH_URL=${AUTH_URL}
+      - LEDGER_API_AUTH_AUDIENCE=${LEDGER_API_AUTH_AUDIENCE}
+      - LEDGER_API_AUTH_SCOPE=${LEDGER_API_AUTH_SCOPE}
+      - LEDGER_API_ADMIN_USER=${LEDGER_API_ADMIN_USER}
+      - WALLET_ADMIN_USER=${WALLET_ADMIN_USER}
+      - VALIDATOR_AUTH_CLIENT_ID=${VALIDATOR_AUTH_CLIENT_ID}
+      - VALIDATOR_AUTH_CLIENT_SECRET=${VALIDATOR_AUTH_CLIENT_SECRET}
+      - VALIDATOR_AUTH_AUDIENCE=${VALIDATOR_AUTH_AUDIENCE}
+      - WALLET_UI_CLIENT_ID=${WALLET_UI_CLIENT_ID}
+      - ANS_UI_CLIENT_ID=${ANS_UI_CLIENT_ID}
+      
+      # Additional Configuration
+      - CONTACT_POINT=${CONTACT_POINT}
+      - TARGET_TRAFFIC_THROUGHPUT=${TARGET_TRAFFIC_THROUGHPUT}
+      - MIN_TRAFFIC_TOPUP_INTERVAL=${MIN_TRAFFIC_TOPUP_INTERVAL}
+      
+      # UI Branding
+      - SPLICE_APP_UI_NETWORK_NAME=${SPLICE_APP_UI_NETWORK_NAME}
+      - SPLICE_APP_UI_NETWORK_FAVICON_URL=${SPLICE_APP_UI_NETWORK_FAVICON_URL}
+      - SPLICE_APP_UI_AMULET_NAME=${SPLICE_APP_UI_AMULET_NAME}
+      - SPLICE_APP_UI_AMULET_NAME_ACRONYM=${SPLICE_APP_UI_AMULET_NAME_ACRONYM}
+      - SPLICE_APP_UI_NAME_SERVICE_NAME=${SPLICE_APP_UI_NAME_SERVICE_NAME}
+      - SPLICE_APP_UI_NAME_SERVICE_NAME_ACRONYM=${SPLICE_APP_UI_NAME_SERVICE_NAME_ACRONYM}
+    ports:
+      - "80:80"
+      - "4001:4001"
+      - "4002:4002"
+      - "5003:5003"
+      - "5004:5004"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker:/usr/libexec/docker:ro
+      - ./data:/data
+      - ./logs:/logs
+    restart: unless-stopped
+    network_mode: host

@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__acp__Bash",
+      "mcp__acp__Write",
+      "mcp__acp__Edit",
+      "WebFetch(domain:1otc.cc)",
+      "mcp__mcp-server-playwright__browser_navigate",
+      "Bash(npx @anthropic-ai/create-skill-app@latest)",
+      "WebSearch",
+      "Bash(npm search @anthropic-ai)",
+      "WebFetch(domain:skills.sh)",
+      "Bash(npx skills add https://github.com/anthropics/skills --skill skill-creator)",
+      "Bash(npx skills add https://github.com/anthropics/skills --skill skill-creator --agent claude-code -y)",
+      "Bash(chmod:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:www.kapa.ai)",
+      "WebFetch(domain:www.gocodeo.com)",
+      "WebFetch(domain:agenta.ai)",
+      "WebFetch(domain:codescene.com)",
+      "WebFetch(domain:engineering.purdue.edu)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(xargs -I {} bash -c 'echo \"\"=== {} ===\"\" && head -15 {}')"
+    ]
+  }
+}

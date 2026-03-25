@@ -1,0 +1,36 @@
+-- Common.Compliance (05_DAML_CONTRACTS_SPEC §2.2)
+module Common.Compliance where
+
+import Common.Types
+
+-- Compliance Record
+data ComplianceRecord = ComplianceRecord with
+  investorId: Text
+  kycStatus: KYCStatus
+  accreditedInvestor: Bool
+  qualifiedPurchaser: Bool
+  jurisdiction: Jurisdiction
+  sanctionsCleared: Bool
+  amlCleared: Bool
+  lastVerificationDate: Date
+  expirationDate: Date
+  deriving (Eq, Show)
+
+-- Check if investor meets compliance requirements
+checkCompliance : ComplianceRecord -> ComplianceLevel -> Bool
+checkCompliance record requiredLevel =
+  let
+    meetsKYC = record.kycStatus >= BASIC
+    meetsSanctions = record.sanctionsCleared
+    meetsAML = record.amlCleared
+    meetsLevel = case requiredLevel of
+      RETAIL -> True
+      ACCREDITED -> record.accreditedInvestor
+      QUALIFIED_PURCHASER -> record.qualifiedPurchaser
+      INSTITUTIONAL -> record.qualifiedPurchaser && record.accreditedInvestor
+  in meetsKYC && meetsSanctions && meetsAML && meetsLevel
+
+-- Check jurisdiction restrictions
+checkJurisdiction : Jurisdiction -> [Jurisdiction] -> Bool
+checkJurisdiction investorJurisdiction allowedJurisdictions =
+  investorJurisdiction `elem` allowedJurisdictions

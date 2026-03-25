@@ -1,0 +1,3 @@
+[submodule "cantonnet-omnichain-sdk"]
+	path = cantonnet-omnichain-sdk
+	url = https://github.com/TheMacroeconomicDao/cantonnet-omnichain-sdk.git

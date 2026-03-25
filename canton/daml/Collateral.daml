@@ -1,0 +1,304 @@
+-- | Collateral Contract
+-- Manages collateral for OTC trades
+module Collateral where
+
+import DA.Time
+import DA.Optional
+import DA.Text as T
+import OtcTypes
+
+-- | Forfeited collateral contract - represents forfeited funds transferred to beneficiary
+template ForfeitedCollateral
+  with
+    beneficiary : Party              -- ^ Party receiving forfeited funds
+    asset : Asset                    -- ^ Forfeited asset
+    amount : Decimal                 -- ^ Forfeited amount
+    sourceCollateralId : Text        -- ^ Original collateral ID
+    forfeitedAt : Time               -- ^ Forfeiture timestamp
+    reason : Text                    -- ^ Forfeiture reason
+    operator : Party                 -- ^ Platform operator
+  where
+    signatory beneficiary, operator
+    observer ([] : [Party])
+
+    ensure
+      amount > 0.0 &&
+      sourceCollateralId /= "" &&
+      reason /= ""
+
+-- | Collateral template
+-- Manages collateral deposits, locks, and releases
+template Collateral
+  with
+    -- === Identification ===
+    collateralId : Text              -- ^ Unique collateral ID
+    offerId : Optional Text          -- ^ Related offer ID (if locked)
+
+    -- === Parties ===
+    operator : Party                 -- ^ Platform operator
+    owner : Party                    -- ^ Collateral owner
+    beneficiary : Optional Party     -- ^ Beneficiary if forfeited
+
+    -- === Collateral Details ===
+    asset : Asset                    -- ^ Collateral asset
+    initialAmount : Decimal          -- ^ Original deposited amount
+    currentAmount : Decimal          -- ^ Current available amount
+
+    -- === Lock Details ===
+    lockedAmount : Decimal           -- ^ Amount currently locked
+    lockedUntil : Optional Time      -- ^ Lock expiration time
+
+    -- === Status & Timing ===
+    status : CollateralStatus        -- ^ Current status
+    createdAt : Time                 -- ^ Creation time
+    updatedAt : Time                 -- ^ Last update time
+
+    -- === Observers ===
+    auditors : [Party]               -- ^ Regulatory observers
+  where
+    signatory owner, operator
+    observer (optional [] (\b -> [b]) beneficiary) ++ auditors
+
+    -- === Invariants ===
+    ensure
+      -- Amount validations
+      initialAmount > 0.0 &&
+      currentAmount >= 0.0 &&
+      currentAmount <= initialAmount &&
+      lockedAmount >= 0.0 &&
+      lockedAmount <= initialAmount &&
+      (currentAmount + lockedAmount) == initialAmount &&
+
+      -- Asset validations
+      asset.amount == initialAmount &&
+
+      -- ID validation
+      collateralId /= "" &&
+
+      -- Time validations
+      updatedAt >= createdAt &&
+
+      -- Status consistency
+      (if status == CollateralLocked then isSome lockedUntil else True) &&
+      (if status == CollateralAvailable then lockedAmount == 0.0 else True)
+
+    -- === Choices ===
+
+    -- | Lock collateral - lock collateral for a trade
+    choice Lock : ContractId Collateral
+      with
+        locker : Party
+        amount : Decimal
+        lockOfferId : Text
+        lockDuration : RelTime         -- ^ Lock duration
+        currentTime : Time
+      controller locker
+      do
+        -- Validation: Only operator can lock
+        assertMsg "Only operator can lock collateral"
+          (locker == operator)
+
+        -- Validation: Must be available
+        assertMsg "Collateral not available for locking"
+          (status == CollateralAvailable)
+
+        -- Validation: Sufficient available amount
+        assertMsg "Insufficient collateral available"
+          (amount <= currentAmount)
+
+        -- Validation: Amount must be positive
+        assertMsg "Lock amount must be positive" (amount > 0.0)
+
+        -- Validation: Offer ID provided
+        assertMsg "Offer ID required for lock" (lockOfferId /= "")
+
+        -- Validation: Lock duration bounds
+        assertMsg "Lock duration must be positive" (lockDuration > hours 0)
+        assertMsg "Lock duration max 365 days" (lockDuration <= days 365)
+
+        -- Calculate lock expiration
+        let lockExpiry = addRelTime currentTime lockDuration
+
+        -- Update collateral
+        create this with
+          status = CollateralLocked
+          lockedAmount = amount
+          currentAmount = currentAmount - amount
+          lockedUntil = Some lockExpiry
+          offerId = Some lockOfferId
+          updatedAt = currentTime
+
+    -- | Release collateral - release locked collateral back to owner
+    choice Release : ContractId Collateral
+      with
+        releaser : Party
+        amount : Decimal
+        currentTime : Time
+      controller releaser
+      do
+        -- Validation: Only operator can release
+        assertMsg "Only operator can release collateral"
+          (releaser == operator)
+
+        -- Validation: Must be locked
+        assertMsg "Collateral not locked" (status == CollateralLocked)
+
+        -- Validation: Amount must not exceed locked amount
+        assertMsg "Release amount exceeds locked amount"
+          (amount <= lockedAmount)
+
+        -- Validation: Amount must be positive
+        assertMsg "Release amount must be positive" (amount > 0.0)
+
+        -- Update collateral
+        let newLockedAmount = lockedAmount - amount
+        let newCurrentAmount = currentAmount + amount
+        let newStatus = if newLockedAmount == 0.0
+                       then CollateralReleased
+                       else CollateralLocked
+        let newLockedUntil = if newLockedAmount == 0.0
+                            then None
+                            else lockedUntil
+        let newOfferId = if newLockedAmount == 0.0
+                        then None
+                        else offerId
+
+        create this with
+          status = newStatus
+          lockedAmount = newLockedAmount
+          currentAmount = newCurrentAmount
+          lockedUntil = newLockedUntil
+          offerId = newOfferId
+          updatedAt = currentTime
+
+    -- | Forfeit collateral - forfeit collateral due to violation
+    choice Forfeit : ()
+      with
+        forfeiter : Party
+        forfeitAmount : Decimal
+        reason : Text
+        toBeneficiary : Party
+        currentTime : Time
+      controller forfeiter
+      do
+        -- Validation: Only operator can forfeit
+        assertMsg "Only operator can forfeit collateral"
+          (forfeiter == operator)
+
+        -- Validation: Must be locked
+        assertMsg "Can only forfeit locked collateral"
+          (status == CollateralLocked)
+
+        -- Validation: Amount validation
+        assertMsg "Forfeit amount exceeds locked amount"
+          (forfeitAmount <= lockedAmount)
+
+        -- Validation: Amount must be positive
+        assertMsg "Forfeit amount must be positive" (forfeitAmount > 0.0)
+
+        -- Validation: Reason required
+        assertMsg "Forfeit reason required" (reason /= "")
+
+        -- FIX P0-13: Create ForfeitedCollateral for beneficiary instead of just archiving
+        -- Transfer forfeited funds to beneficiary
+        create ForfeitedCollateral with
+          beneficiary = toBeneficiary
+          asset = asset with amount = forfeitAmount
+          amount = forfeitAmount
+          sourceCollateralId = collateralId
+          forfeitedAt = currentTime
+          reason = reason
+          operator = operator
+
+        -- Archive current collateral (forfeited)
+        pure ()
+
+    -- | Withdraw - owner withdraws available collateral
+    choice Withdraw : ContractId Collateral
+      with
+        withdrawer : Party
+        amount : Decimal
+        currentTime : Time
+      controller withdrawer
+      do
+        -- Validation: Only owner can withdraw
+        assertMsg "Only owner can withdraw" (withdrawer == owner)
+
+        -- Validation: Must have available amount
+        assertMsg "No available collateral to withdraw"
+          (currentAmount > 0.0)
+
+        -- Validation: Amount validation
+        assertMsg "Withdrawal amount exceeds available"
+          (amount <= currentAmount)
+
+        -- Validation: Amount must be positive
+        assertMsg "Withdrawal amount must be positive" (amount > 0.0)
+
+        -- FIX P0-14: Verify invariant will hold after withdrawal
+        let newCurrentAmount = currentAmount - amount
+        let newInitialAmount = initialAmount - amount
+        assertMsg "Invariant maintained after withdrawal"
+          ((newCurrentAmount + lockedAmount) == newInitialAmount)
+
+        -- Update collateral
+        create this with
+          currentAmount = newCurrentAmount
+          initialAmount = newInitialAmount
+          asset = asset with amount = newInitialAmount
+          updatedAt = currentTime
+
+    -- | Top up - add more collateral
+    choice TopUp : ContractId Collateral
+      with
+        topper : Party
+        additionalAmount : Decimal
+        depositProof : Text           -- ^ Deposit transaction hash
+        currentTime : Time
+      controller topper
+      do
+        -- Validation: Only owner can top up
+        assertMsg "Only owner can top up" (topper == owner)
+
+        -- Validation: Amount must be positive
+        assertMsg "Top up amount must be positive" (additionalAmount > 0.0)
+
+        -- Validation: Deposit proof required
+        assertMsg "Deposit proof (txHash) required" (depositProof /= "")
+
+        -- Update collateral
+        create this with
+          initialAmount = initialAmount + additionalAmount
+          currentAmount = currentAmount + additionalAmount
+          asset = asset with amount = initialAmount + additionalAmount
+          updatedAt = currentTime
+
+    -- | Auto-release expired lock
+    choice AutoRelease : ContractId Collateral
+      with
+        releaser : Party
+        currentTime : Time
+      controller releaser
+      do
+        -- Validation: Only operator can auto-release
+        assertMsg "Only operator can auto-release"
+          (releaser == operator)
+
+        -- Validation: Must be locked
+        assertMsg "Collateral not locked" (status == CollateralLocked)
+
+        -- Validation: Lock must be expired
+        case lockedUntil of
+          None -> abort "No lock expiration time set"
+          Some expiry -> do
+            -- FIX P0-20: Changed > to >= to allow exact expiry time match
+            assertMsg "Lock has not expired yet" (currentTime >= expiry)
+
+            -- Release all locked amount
+            create this with
+              status = CollateralAvailable
+              currentAmount = currentAmount + lockedAmount
+              lockedAmount = 0.0
+              lockedUntil = None
+              offerId = None
+              updatedAt = currentTime

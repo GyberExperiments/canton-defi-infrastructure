@@ -1,0 +1,57 @@
+{
+  "name": "Canton OTC Exchange - Buy Canton Coin",
+  "short_name": "Canton OTC",
+  "description": "Professional over-the-counter cryptocurrency exchange for Canton Coin. Buy Canton with USDT, ETH, or BNB instantly.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0b0f",
+  "theme_color": "#6366f1",
+  "orientation": "portrait",
+  "scope": "/",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["finance", "cryptocurrency", "exchange"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-16x16.png",
+      "sizes": "16x16",
+      "type": "image/png"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Buy Canton",
+      "short_name": "Buy",
+      "description": "Buy Canton Coin instantly",
+      "url": "/?action=buy"
+    },
+    {
+      "name": "DeFi Platform",
+      "short_name": "DeFi",
+      "description": "Access Canton DeFi features",
+      "url": "/defi"
+    }
+  ],
+  "related_applications": [],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  }
+}

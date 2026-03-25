@@ -1,0 +1,243 @@
+# Simple deployment workflow without advanced security features
+# Use this if the main deploy.yml fails due to GitHub Advanced Security issues
+
+name: 🚀 Simple Deploy (Fallback)
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment (bypass security checks)'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+        - 'false'
+        - 'true'
+
+# ✅ ЗАЩИТА ОТ КОНКЛИКТОВ - Только один simple deployment одновременно
+concurrency:
+  group: simple-deployment-${{ github.ref }}
+  cancel-in-progress: false  # Не отменяем, ставим в очередь
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ========================================
+  # SIMPLE BUILD & DEPLOY
+  # ========================================
+  simple-deploy:
+    name: 🔨 Build & Deploy (Simple)
+    runs-on: ubuntu-latest
+    if: github.event.inputs.force_deploy == 'true'
+    environment: 
+      name: production
+      url: https://1otc.cc
+    permissions:
+      contents: read
+      packages: write
+    # ✅ ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА - Эксклюзивный доступ к production
+    concurrency:
+      group: deployment-production
+      cancel-in-progress: false
+      
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🏷️ Normalize image name
+      id: image-name
+      run: |
+        # Convert repository name to lowercase for Docker compatibility
+        IMAGE_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+        echo "value=${IMAGE_NAME_LOWER}" >> $GITHUB_OUTPUT
+        echo "Normalized image name: ${IMAGE_NAME_LOWER}"
+      
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🔐 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GHCR_TOKEN }}
+        
+    - name: 🔨 Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:latest
+          ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:main
+          ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:main-${{ github.sha }}
+        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:buildcache
+        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:buildcache,mode=max
+
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+        
+    - name: 🔐 Configure kubectl
+      run: |
+        echo "🔐 Настройка kubectl..."
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+        
+        echo "✅ Тестируем подключение к кластеру..."
+        kubectl cluster-info --request-timeout=10s
+
+    - name: 📦 Create namespace
+      run: |
+        echo "📦 Создание namespace..."
+        cd config/kubernetes/k8s
+        kubectl apply -f namespace.yaml
+        echo "✅ Namespace готов"
+
+    - name: 🔐 Setup Docker registry secret
+      run: |
+        echo "🔐 Создание Docker registry секрета для ghcr.io..."
+        
+        # Создаем секрет для доступа к GitHub Container Registry с полными правами
+        kubectl create secret docker-registry ghcr-secret \
+          --docker-server=ghcr.io \
+          --docker-username=${{ github.actor }} \
+          --docker-password=${{ secrets.GHCR_TOKEN }} \
+          --docker-email=${{ github.actor }}@users.noreply.github.com \
+          --namespace=canton-otc \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "✅ Docker registry секрет создан для ghcr.io с полными правами"
+
+    - name: 🔐 Setup application secrets
+      run: |
+        echo "🔐 Создание секретов приложения..."
+        cd k8s
+        
+        # Функция для безопасного base64 кодирования
+        safe_b64() {
+          if [ -z "$1" ]; then
+            echo -n "" | base64 | tr -d '\n'
+          else
+            echo -n "$1" | base64 | tr -d '\n'
+          fi
+        }
+        
+        # Кодируем все секреты в base64 (как требует secret.template.yaml)
+        echo "📝 Кодируем секреты в base64..."
+        export GOOGLE_SHEET_ID_B64=$(safe_b64 "$GOOGLE_SHEET_ID")
+        export GOOGLE_SERVICE_ACCOUNT_EMAIL_B64=$(safe_b64 "$GOOGLE_SERVICE_ACCOUNT_EMAIL")
+        export GOOGLE_PRIVATE_KEY_B64=$(safe_b64 "$GOOGLE_PRIVATE_KEY")
+        export TELEGRAM_BOT_TOKEN_B64=$(safe_b64 "$TELEGRAM_BOT_TOKEN")
+        export TELEGRAM_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_CHAT_ID")
+        export TELEGRAM_CLIENT_GROUP_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_CLIENT_GROUP_CHAT_ID")
+        export TELEGRAM_API_ID_B64=$(safe_b64 "$TELEGRAM_API_ID")
+        export TELEGRAM_API_HASH_B64=$(safe_b64 "$TELEGRAM_API_HASH")
+        export TELEGRAM_SESSION_STRING_B64=$(safe_b64 "$TELEGRAM_SESSION_STRING")
+        export SMTP_HOST_B64=$(safe_b64 "$SMTP_HOST")
+        export SMTP_PORT_B64=$(safe_b64 "$SMTP_PORT")
+        export SMTP_SECURE_B64=$(safe_b64 "$SMTP_SECURE")
+        export SMTP_USER_B64=$(safe_b64 "$SMTP_USER")
+        export SMTP_PASSWORD_B64=$(safe_b64 "$SMTP_PASSWORD")
+        export SMTP_FROM_ADDRESS_B64=$(safe_b64 "$SMTP_FROM_ADDRESS")
+        export SMTP_FROM_NAME_B64=$(safe_b64 "$SMTP_FROM_NAME")
+        export USDT_RECEIVING_ADDRESS_B64=$(safe_b64 "$USDT_RECEIVING_ADDRESS")
+        export CANTON_COIN_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_PRICE_USD")
+        export ADMIN_API_KEY_B64=$(safe_b64 "$ADMIN_API_KEY")
+        export NEXTAUTH_SECRET_B64=$(safe_b64 "$NEXTAUTH_SECRET")
+        export NEXTAUTH_URL_B64=$(safe_b64 "$NEXTAUTH_URL")
+        
+        echo "✅ Все секреты закодированы в base64"
+        
+        # Создаем секрет из template с подстановкой base64 значений
+        envsubst < secret.template.yaml > secret.yaml
+        
+        kubectl apply -f secret.yaml
+        rm secret.yaml # Убираем файл с секретами
+        echo "✅ Секреты приложения созданы"
+      env:
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+        GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_CLIENT_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_CLIENT_GROUP_CHAT_ID }}
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+        SMTP_HOST: ${{ secrets.SMTP_HOST }}
+        SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+        SMTP_USER: ${{ secrets.SMTP_USER }}
+        SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
+        SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+        USDT_RECEIVING_ADDRESS: ${{ secrets.USDT_RECEIVING_ADDRESS }}
+        CANTON_COIN_PRICE_USD: ${{ secrets.CANTON_COIN_PRICE_USD }}
+        ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+        NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+        NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+
+    - name: 🚀 Deploy application
+      run: |
+        echo "🚀 Разворачиваем приложение (простой режим)..."
+        cd config/kubernetes/k8s
+        
+        # Используем правильное имя образа
+        IMAGE_WITH_TAG="ghcr.io/themacroeconomicdao/cantonotc:main"
+        echo "Deploying image: ${IMAGE_WITH_TAG}"
+        
+        # Применяем все манифесты
+        kubectl apply -f service.yaml
+        kubectl apply -f deployment.yaml  
+        kubectl apply -f ingress.yaml
+        
+        # Удаляем старые поды и обновляем образ в deployment
+        echo "🗑️ Удаляем старые поды..."
+        kubectl delete pods -l app=canton-otc -n canton-otc --ignore-not-found=true
+        
+        # Обновляем образ в deployment с принудительным перезапуском
+        kubectl set image deployment/canton-otc canton-otc=${IMAGE_WITH_TAG} -n canton-otc
+        kubectl annotate deployment/canton-otc deployment.kubernetes.io/revision- -n canton-otc
+        
+        echo "✅ Приложение развернуто"
+
+    - name: ⏳ Wait for deployment
+      run: |
+        echo "⏳ Ждем готовности deployment..."
+        kubectl rollout status deployment/canton-otc -n canton-otc --timeout=300s
+        echo "✅ Deployment готов!"
+
+    - name: 🔍 Verify deployment
+      run: |
+        echo "🔍 Проверяем статус приложения..."
+        
+        # Статус подов
+        echo "📊 Статус подов:"
+        kubectl get pods -n canton-otc
+        
+        # Статус сервисов  
+        echo "🌐 Статус сервисов:"
+        kubectl get services -n canton-otc
+        
+        # Логи приложения (последние 20 строк)
+        echo "📝 Последние логи приложения:"
+        kubectl logs --tail=20 deployment/canton-otc -n canton-otc || echo "Логи пока недоступны"
+        
+        echo "✅ Простой деплой завершен успешно!"
+
+    - name: 🎉 Deployment Summary
+      run: |
+        echo "🎉 Простой деплой завершен!"
+        echo "🌐 Ваш сайт: https://1otc.cc"
+        echo "🔍 Health check: https://1otc.cc/api/health"
+        echo "📊 Admin панель: https://1otc.cc/admin"
+        echo ""
+        echo "⚠️ Примечание: Использован упрощенный режим без advanced security проверок"
+        echo "💡 Для включения полного security scanning включите GitHub Advanced Security"

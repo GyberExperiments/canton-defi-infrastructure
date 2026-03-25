@@ -1,0 +1,13 @@
+# DevNet overrides for splice-participant (merge with bundle's standalone-participant-values.yaml)
+
+migration:
+  id: "0"
+
+# Имя БД participant (chart ожидает participant_MIGRATION_ID — подставляем 0)
+persistence:
+  databaseName: participant_0
+
+disableAuth: true
+
+nodeSelector:
+  kubernetes.io/hostname: canton-node-65-108-15-30

@@ -1,0 +1,17 @@
+---
+# Apply all resources:
+#   kubectl apply -k k8s/canton-otc-api/ -n validator
+#
+# Or individually:
+#   kubectl apply -f k8s/canton-otc-api/secret.yaml
+#   kubectl apply -f k8s/canton-otc-api/deployment.yaml
+#   kubectl apply -f k8s/canton-otc-api/service.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: validator
+
+resources:
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml

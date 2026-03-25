@@ -1,0 +1,222 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: devnet-snat-fix
+  namespace: validator
+  labels:
+    app: devnet-snat-fix
+spec:
+  selector:
+    matchLabels:
+      app: devnet-snat-fix
+  template:
+    metadata:
+      labels:
+        app: devnet-snat-fix
+    spec:
+      hostNetwork: true
+      hostPID: true
+      nodeSelector:
+        kubernetes.io/hostname: canton-node-65-108-15-30
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: snat-manager
+          image: nicolaka/netshoot:latest
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              echo "DevNet SNAT Fix (DNS-based) - Starting..."
+              echo "Resolves Canton DevNet domains every 60s and maintains SNAT rules"
+              echo "Source IP: 65.108.15.30 (whitelisted in DevNet)"
+
+              SOURCE_IP="65.108.15.30"
+
+              # All Canton DevNet domains that our participant/validator connect to
+              # Includes sequencer, mediator, SV, and ALL scan endpoints for BFT
+              DEVNET_DOMAINS=(
+                # Core infrastructure (sequencer, mediator, SV)
+                "sequencer-1.sv-1.dev.global.canton.network.sync.global"
+                "sequencer.sv-1.dev.global.canton.network.sync.global"
+                "mediator-1.sv-1.dev.global.canton.network.sync.global"
+                "mediator.sv-1.dev.global.canton.network.sync.global"
+                "sv-1.sv-1.dev.global.canton.network.sync.global"
+                "sv.sv-1.dev.global.canton.network.sync.global"
+                "global.canton.network.sync.global"
+                # Migration-1 sequencer endpoints (current epoch, selected by domain-migration-id=1)
+                "sequencer-1.sv-1.dev.global.canton.network.mpch.io"
+                "sequencer-1.sv-1.dev.global.canton.network.lcv.mpch.io"
+                "sequencer-1.sv-1.dev.global.canton.network.orb1lp.mpch.io"
+                "sequencer-1.sv-1.dev.global.canton.network.fivenorth.io"
+                "sequencer-1.sv-1.dev.global.canton.network.proofgroup.xyz"
+                "sequencer-1.sv-1.dev.global.canton.network.cumberland.io"
+                "sequencer-1.sv-2.dev.global.canton.network.cumberland.io"
+                "sequencer-1.sv-1.dev.global.canton.network.tradeweb.com"
+                "sequencer-1.sv.dev.global.canton.network.sv-nodeops.com"
+                "sequencer-1.sv-1.dev.global.canton.network.c7.digital"
+                "sequencer-1.sv.dev.global.canton.network.digitalasset.com"
+                "sequencer-1.sv-2.dev.global.canton.network.digitalasset.com"
+                "sequencer-1.sv-1.dev.global.canton.network.digitalasset.com"
+                # Scan endpoints (validator-app needs 5+ for BFT)
+                "scan.sv-1.dev.global.canton.network.sync.global"
+                "scan.sv-1.dev.global.canton.network.cumberland.io"
+                "scan.sv-1.dev.global.canton.network.mpch.io"
+                "scan.sv-1.dev.global.canton.network.digitalasset.com"
+                "scan.sv-1.dev.global.canton.network.c7.digital"
+                "scan.sv-1.dev.global.canton.network.fivenorth.io"
+                "scan.sv-1.dev.global.canton.network.lcv.mpch.io"
+                "scan.sv-1.dev.global.canton.network.orb1lp.mpch.io"
+                "scan.sv-1.dev.global.canton.network.proofgroup.xyz"
+                "scan.sv-1.dev.global.canton.network.tradeweb.com"
+                "scan.sv-1.dev.global.canton.network.sv-nodeops.com"
+                "scan.sv-2.dev.global.canton.network.cumberland.io"
+                "scan.sv-2.dev.global.canton.network.digitalasset.com"
+                "scan.sv.dev.global.canton.network.digitalasset.com"
+                "scan.sv.dev.global.canton.network.sv-nodeops.com"
+              )
+
+              # File to track active SNAT rules we manage
+              RULES_FILE="/tmp/active_snat_rules.txt"
+              touch "$RULES_FILE"
+
+              resolve_all_ips() {
+                local all_ips=""
+                for domain in "${DEVNET_DOMAINS[@]}"; do
+                  # Resolve multiple times to catch DNS round-robin
+                  for attempt in 1 2 3; do
+                    local ip
+                    ip=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}')
+                    if [ -n "$ip" ]; then
+                      all_ips="$all_ips $ip"
+                    fi
+                  done
+                done
+                # Return unique sorted IPs
+                echo "$all_ips" | tr ' ' '\n' | grep -v '^$' | sort -u
+              }
+
+              add_rule() {
+                local ip="$1"
+                if ! nsenter -t 1 -n iptables -t nat -C POSTROUTING -d "$ip" -j SNAT --to-source "$SOURCE_IP" 2>/dev/null; then
+                  echo "[$(date +%H:%M:%S)] Adding SNAT: $ip -> $SOURCE_IP"
+                  nsenter -t 1 -n iptables -t nat -I POSTROUTING 1 -d "$ip" -j SNAT --to-source "$SOURCE_IP"
+                  # Track this rule
+                  grep -qxF "$ip" "$RULES_FILE" 2>/dev/null || echo "$ip" >> "$RULES_FILE"
+                fi
+              }
+
+              cleanup_stale_rules() {
+                # Remove rules for IPs no longer in DNS
+                local current_ips="$1"
+                if [ ! -f "$RULES_FILE" ]; then return; fi
+
+                while IFS= read -r old_ip; do
+                  if ! echo "$current_ips" | grep -qxF "$old_ip"; then
+                    if nsenter -t 1 -n iptables -t nat -C POSTROUTING -d "$old_ip" -j SNAT --to-source "$SOURCE_IP" 2>/dev/null; then
+                      echo "[$(date +%H:%M:%S)] Removing stale SNAT: $old_ip (no longer in DNS)"
+                      nsenter -t 1 -n iptables -t nat -D POSTROUTING -d "$old_ip" -j SNAT --to-source "$SOURCE_IP" 2>/dev/null || true
+                    fi
+                  fi
+                done < "$RULES_FILE"
+
+                # Update rules file with current IPs only
+                echo "$current_ips" > "$RULES_FILE"
+              }
+
+              update_snat_rules() {
+                echo "[$(date +%H:%M:%S)] Resolving DevNet domains..."
+                local ips
+                ips=$(resolve_all_ips)
+                local count
+                count=$(echo "$ips" | wc -l | tr -d ' ')
+
+                if [ -z "$ips" ] || [ "$count" -eq 0 ]; then
+                  echo "[$(date +%H:%M:%S)] WARNING: DNS resolution returned no IPs, keeping existing rules"
+                  return
+                fi
+
+                echo "[$(date +%H:%M:%S)] Resolved $count unique IPs: $(echo $ips | tr '\n' ' ')"
+
+                # Add rules for current IPs
+                while IFS= read -r ip; do
+                  [ -n "$ip" ] && add_rule "$ip"
+                done <<< "$ips"
+
+                # Clean up old rules for IPs no longer in DNS
+                cleanup_stale_rules "$ips"
+              }
+
+              show_rules() {
+                echo ""
+                echo "Active SNAT rules for $SOURCE_IP:"
+                nsenter -t 1 -n iptables -t nat -L POSTROUTING -n -v | grep "$SOURCE_IP" || echo "  (none)"
+                echo ""
+              }
+
+              # Initial run
+              update_snat_rules
+              show_rules
+
+              # Refresh every 60 seconds (AWS ALB IPs can rotate)
+              while true; do
+                sleep 60
+                update_snat_rules
+              done
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devnet-snat-info
+  namespace: validator
+data:
+  README.md: |
+    # DevNet SNAT Fix (DNS-based)
+
+    ## Purpose
+    Ensures outgoing traffic to Canton Network DevNet uses the whitelisted IP 65.108.15.30.
+    Resolves DevNet domains every 60 seconds to handle AWS ALB IP rotation.
+
+    ## Problem
+    - Server has multiple IPs: 65.108.15.30 (whitelisted), 65.108.15.20 (default)
+    - DevNet sequencer/mediator are behind AWS ALB — IPs rotate regularly
+    - Static SNAT rules break when ALB IPs change
+    - Result: PERMISSION_DENIED from sequencer, participant disconnects
+
+    ## Solution
+    DNS-based SNAT: resolve all DevNet domains every 60s, update iptables dynamically.
+
+    ## Domains tracked (35 total)
+    Core: sequencer, mediator, SV (6 domains)
+    Migration-1 sequencers (14 domains, epoch domain-migration-id=1)
+    Scan endpoints for BFT (15 domains across all SV operators)
+
+    ## Verification
+    ```bash
+    # Check logs
+    kubectl logs -n validator daemonset/devnet-snat-fix -f
+
+    # Check current rules
+    kubectl exec -n validator daemonset/devnet-snat-fix -- \
+      nsenter -t 1 -n iptables -t nat -L POSTROUTING -n -v | grep 65.108.15.30
+
+    # Test egress IP to sequencer
+    kubectl exec -n validator participant-<pod> -- \
+      curl -4 -s -o /dev/null -w '%{local_ip} -> %{remote_ip}\n' \
+      https://sequencer-1.sv-1.dev.global.canton.network.sync.global:443/
+    ```

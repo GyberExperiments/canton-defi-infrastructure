@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  canton-validator:
+    image: canton-sync:${IMAGE_TAG:-0.5.8}
+    container_name: canton-validator-devnet
+    restart: unless-stopped
+    
+    # Environment variables
+    environment:
+      - CANTON_NETWORK=devnet
+      - CANTON_API=${CANTON_API:-https://sv.sv-1.dev.global.canton.network.sync.global}
+      - VALIDATOR_NAME=${VALIDATOR_NAME:-gyber-validator}
+      - VALIDATOR_MODE=${VALIDATOR_MODE:-0}
+      - ONBOARDING_SECRET=${ONBOARDING_SECRET}
+      - PARTY_HINT=${PARTY_HINT:-gyber-validator}
+      
+    # Ports (adjust as needed for your setup)
+    ports:
+      - "8080:8080"   # Canton API port
+      - "8081:8081"   # Canton admin port
+      - "8082:8082"   # Canton ledger API port
+      
+    # Volumes for persistent data
+    volumes:
+      - canton-data:/opt/canton/data
+      - canton-logs:/opt/canton/logs
+      - canton-config:/opt/canton/config
+      - ./config/canton.conf:/opt/canton/config/canton.conf:ro
+      - ./config/validator.conf:/opt/canton/config/validator.conf:ro
+      
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+          
+    # Security
+    security_opt:
+      - no-new-privileges:true
+      
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        
+    # Network
+    networks:
+      - canton-network
+
+  # Optional: Monitoring service
+  canton-monitor:
+    image: prom/node-exporter:latest
+    container_name: canton-monitor
+    restart: unless-stopped
+    
+    ports:
+      - "9100:9100"
+      
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      
+    networks:
+      - canton-network
+
+  # Optional: Log aggregation
+  canton-logs:
+    image: fluent/fluent-bit:latest
+    container_name: canton-logs
+    restart: unless-stopped
+    
+    volumes:
+      - ./config/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - canton-logs:/var/log/canton:ro
+      
+    networks:
+      - canton-network
+
+# Named volumes for persistent data
+volumes:
+  canton-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data
+      
+  canton-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/logs
+      
+  canton-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/config
+
+# Network configuration
+networks:
+  canton-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+
+
+
+
+

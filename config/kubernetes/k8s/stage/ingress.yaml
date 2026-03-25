@@ -1,0 +1,43 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: canton-otc-https
+  namespace: canton-otc-stage
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`stage.build.infra.1otc.cc`)
+    kind: Rule
+    services:
+    - name: canton-otc-service
+      port: 80
+  tls:
+    secretName: canton-otc-stage-tls
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: canton-otc-http-redirect
+  namespace: canton-otc-stage
+spec:
+  entryPoints:
+    - web
+  routes:
+  - match: Host(`stage.build.infra.1otc.cc`)
+    kind: Rule
+    services:
+    - name: canton-otc-service
+      port: 80
+    middlewares:
+    - name: canton-otc-stage-https-redirect
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: canton-otc-stage-https-redirect
+  namespace: canton-otc-stage
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

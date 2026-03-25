@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: build-stub-script
+  namespace: canton-otc
+data:
+  build.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "🚀 Building Canton API Server stub..."
+
+    # Install dependencies
+    apk add --no-cache git curl
+
+    # Clone repo
+    cd /tmp
+    git clone https://github.com/TheMacroeconomicDao/CantonOTC.git
+    cd CantonOTC/canton-api-server-stub
+
+    # Build image
+    echo "Building Docker image..."
+    docker build -t ghcr.io/themacroeconomicdao/canton-api-server:latest .
+
+    # Login to GHCR
+    if [ -n "$GITHUB_TOKEN" ]; then
+      echo "Logging in to GHCR..."
+      echo "$GITHUB_TOKEN" | docker login ghcr.io -u themacroeconomicdao --password-stdin
+
+      # Push image
+      echo "Pushing image to GHCR..."
+      docker push ghcr.io/themacroeconomicdao/canton-api-server:latest
+
+      echo "✅ Image built and pushed successfully!"
+    else
+      echo "⚠️ GITHUB_TOKEN not set, image built but not pushed"
+    fi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-canton-api-stub
+  namespace: canton-otc
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      containers:
+      - name: builder
+        image: docker:24-dind
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            sh /scripts/build.sh
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+              optional: true
+        volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        - name: build-script
+          mountPath: /scripts
+      volumes:
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
+      - name: build-script
+        configMap:
+          name: build-stub-script
+          defaultMode: 0755
+      restartPolicy: Never
+  backoffLimit: 3

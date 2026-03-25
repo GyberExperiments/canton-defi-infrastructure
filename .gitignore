@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+target/
+*.log
+build-errors.log
+build.log
+deploy-fix.log
+docker-build.log
+.env
+.env.*
+!.env.example
+tsconfig.tsbuildinfo
+pnpm-lock.yaml

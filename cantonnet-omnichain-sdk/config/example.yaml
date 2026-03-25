@@ -1,0 +1,66 @@
+# Canton OTC API — DevNet Configuration
+# Copy to config/local.yaml and substitute your values (config/local.yaml is in .gitignore).
+# DevNet: docs/DEVNET_PARTICIPANT.md. Production: config/example-production.yaml -> config/local.yaml.
+
+# Ledger API participant (default — DevNet for development; override in config/local.yaml for prod)
+ledger_api:
+  grpc_host: "65.108.15.30"
+  grpc_port: 30501
+  http_url: "http://65.108.15.30:30757"
+  tls: false
+
+canton:
+  endpoint: "http://participant.validator.svc.cluster.local:5001"
+  ledger_id: "canton-otc"
+  application_id: "canton-otc-platform"
+  party_id: "otc-operator::12205aebe83cf5fabb6df16ed315a102eca1785d504405b0bb0fc243100b5a4768e4"
+  trader_party_id: "otc-trader1::12205aebe83cf5fabb6df16ed315a102eca1785d504405b0bb0fc243100b5a4768e4"
+  package_id: "66cfb6c5e8ef3e553a581460a0e2f24c1ffe93128f55d58e7f1bff756d976e53"
+  synchronizer_id: "global-domain::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a"
+  auth_token: ""  # Set via CANTON_AUTH_TOKEN env var
+  tls:
+    ca_cert_path: "/etc/ssl/certs/ca.pem"
+    client_cert_path: "/etc/ssl/certs/client.pem"
+    client_key_path: "/etc/ssl/private/client.key"
+  connect_timeout: "10s"
+  request_timeout: "30s"
+  keep_alive_interval: "30s"
+  max_concurrent_requests: 100
+
+reliability:
+  circuit_breaker:
+    failure_threshold: 5
+    success_threshold: 3
+    reset_timeout: "30s"
+  rate_limiter:
+    max_requests: 100
+    window: "1s"
+    strategy: "token_bucket"
+  retry:
+    max_attempts: 3
+    initial_delay: "100ms"
+    max_delay: "10s"
+    multiplier: 2.0
+
+observability:
+  logging:
+    level: "info"
+    format: "json"
+  metrics:
+    endpoint: "http://otel-collector:4317"
+    export_interval: "10s"
+  tracing:
+    endpoint: "http://otel-collector:4317"
+    sample_rate: 0.1
+
+omnichain:
+  enabled_chains:
+    - ethereum
+    - cosmos
+  chains:
+    ethereum:
+      rpc_url: "https://eth.example.com"
+      chain_id: 1
+    cosmos:
+      rpc_url: "https://cosmos.example.com"
+      chain_id: "cosmoshub-4"

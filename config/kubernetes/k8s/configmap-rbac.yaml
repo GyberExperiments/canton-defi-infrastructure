@@ -1,0 +1,51 @@
+# RBAC для управления ConfigMap из админ панели
+# Даёт права на чтение и изменение ConfigMap canton-otc-config
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canton-otc-configmap-manager
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    component: admin
+    environment: production
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: canton-otc-configmap-editor
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    component: admin
+    environment: production
+rules:
+# Права на управление ConfigMap
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+  resourceNames: 
+  - "canton-otc-config"  # Только наш ConfigMap
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: canton-otc-configmap-editor-binding
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    component: admin
+    environment: production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: canton-otc-configmap-editor
+subjects:
+- kind: ServiceAccount
+  name: canton-otc-configmap-manager
+  namespace: canton-otc
+

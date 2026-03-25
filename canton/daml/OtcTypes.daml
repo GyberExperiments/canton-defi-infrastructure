@@ -1,0 +1,105 @@
+-- | OTC Types Module
+-- Common data types and structures for OTC trading platform
+module OtcTypes where
+
+import DA.Time
+import DA.Optional
+
+-- | Trading direction
+data OtcSide
+  = Buy   -- ^ Buy order
+  | Sell  -- ^ Sell order
+  deriving (Eq, Show)
+
+-- | Offer status lifecycle
+data OtcStatus
+  = Pending        -- ^ Initial state, awaiting acceptance
+  | Active         -- ^ Active and can be filled
+  | PartiallyFilled -- ^ Partially executed
+  | Filled         -- ^ Fully executed
+  | Cancelled      -- ^ Cancelled by maker
+  | Expired        -- ^ Expired due to time
+  | Disputed       -- ^ Under dispute resolution
+  | Rejected       -- ^ Rejected by counterparty
+  deriving (Eq, Show)
+
+-- | Multi-chain asset information
+data Asset = Asset with
+    symbol : Text          -- ^ Asset symbol (e.g., "USDC", "ETH")
+    amount : Decimal       -- ^ Amount in base units
+    chain : Text           -- ^ Chain identifier ("Canton", "Ethereum", "NEAR")
+    contractAddress : Optional Text  -- ^ Contract address for tokens
+  deriving (Eq, Show)
+
+-- | Ensure asset invariants
+ensureAsset : Asset -> Bool
+ensureAsset a = a.amount >= 0.0
+
+-- | Price information
+data Price = Price with
+    rate : Decimal         -- ^ Price per unit
+    currency : Text        -- ^ Currency denomination
+  deriving (Eq, Show)
+
+-- | Ensure price invariants
+ensurePrice : Price -> Bool
+ensurePrice p = p.rate > 0.0
+
+-- | Volume limits for orders
+data VolumeLimits = VolumeLimits with
+    minAmount : Decimal    -- ^ Minimum order size
+    maxAmount : Decimal    -- ^ Maximum order size
+  deriving (Eq, Show)
+
+-- | Ensure volume limits invariants
+ensureVolumeLimits : VolumeLimits -> Bool
+ensureVolumeLimits v = v.minAmount > 0.0 && v.maxAmount > 0.0 && v.minAmount <= v.maxAmount
+
+-- | Party information with signature
+data PartyInfo = PartyInfo with
+    partyId : Party        -- ^ Canton party identifier
+    signature : Text       -- ^ Ed25519 signature (hex encoded)
+    publicKey : Text       -- ^ Public key (hex encoded)
+  deriving (Eq, Show)
+
+-- | Timestamp tracking
+data Timestamps = Timestamps with
+    created : Time         -- ^ Creation timestamp
+    updated : Time         -- ^ Last update timestamp
+    expiresAt : Optional Time  -- ^ Expiration time
+  deriving (Eq, Show)
+
+-- | Settlement details
+data SettlementInfo = SettlementInfo with
+    settlementId : Text    -- ^ Unique settlement identifier
+    paymentProof : Text    -- ^ Payment proof hash (SHA-256)
+    confirmations : Int    -- ^ Number of confirmations
+    completedAt : Optional Time  -- ^ Settlement completion time
+  deriving (Eq, Show)
+
+-- | Collateral status enumeration
+data CollateralStatus
+  = CollateralAvailable   -- ^ Available for locking
+  | CollateralLocked      -- ^ Locked for a trade
+  | CollateralReleased    -- ^ Released back to owner
+  | CollateralForfeited   -- ^ Forfeited due to violation
+  | CollateralLiquidated  -- ^ Liquidated
+  deriving (Eq, Show)
+
+-- | Collateral information
+data CollateralInfo = CollateralInfo with
+    collateralId : Text    -- ^ Unique collateral identifier
+    asset : Asset          -- ^ Collateral asset
+    lockedUntil : Time     -- ^ Lock expiration time
+    status : CollateralStatus  -- ^ Collateral status (enum)
+  deriving (Eq, Show)
+
+-- | Result of offer acceptance
+data AcceptResult = AcceptResult with
+    tradeId : Text         -- ^ Generated trade identifier
+    actualQuantity : Decimal  -- ^ Actual filled quantity
+    actualPrice : Decimal  -- ^ Actual execution price
+    settlementTime : Time  -- ^ Settlement timestamp
+    settlementId : Text    -- ^ Associated settlement ID
+    slippageBps : Int      -- ^ Price slippage in basis points (1 bps = 0.01%)
+  deriving (Eq, Show)

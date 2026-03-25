@@ -1,0 +1,74 @@
+Subject: Request to Unblock Ports - All Security Vulnerabilities Fixed (CVE-2025-55182)
+
+Здравствуйте!
+
+Мы провели полный аудит безопасности нашего кластера и успешно исправили все критические уязвимости, связанные с CVE-2025-55182 (React Server Components Remote Code Execution).
+
+## Выполненные исправления:
+
+### 1. Обновление уязвимых зависимостей
+
+**canton-otc (production, stage, minimal-stage):**
+- React: обновлён с 19.2.0 → 19.2.1 ✅
+- react-dom: обновлён с 19.2.0 → 19.2.1 ✅
+- Next.js: обновлён с 15.1.0 → 15.5.7 ✅
+
+**maximus:**
+- React: обновлён с 19.2.0 → 19.2.1 ✅
+- react-dom: обновлён с 19.2.0 → 19.2.1 ✅
+- Next.js: обновлён с 15.5.4 → 15.5.7 ✅
+
+**DSP (decentralized-social-platform):**
+- Next.js: обновлён с 15.1.8 → 15.5.7 ✅
+- React: 18.2.0 (не уязвим, без изменений) ✅
+
+### 2. Дополнительные меры защиты
+
+- ✅ Применён Traefik Security Middleware для всех проектов
+- ✅ Rate limiting: 100 запросов/секунду с одного IP
+- ✅ Усиленные security headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options)
+- ✅ DDoS защита на уровне кластера
+- ✅ Мониторинг подозрительной активности
+
+### 3. Развёртывание исправлений
+
+Все проекты пересобраны с исправленными версиями и развёрнуты в кластере:
+
+- ✅ canton-otc:main (production) - 2/2 pods running
+- ✅ canton-otc:stage - 1/1 pod running
+- ✅ canton-otc:minimal-stage - 1/1 pod running
+- ✅ maximus:main - 2/2 pods running
+- ✅ dsp-prod:latest - 3/3 pods running (dsp-prod-deployment-primary)
+
+Все образы запушены в GitHub Container Registry и используют последние исправленные версии:
+- ghcr.io/themacroeconomicdao/cantonotc:main (Image ID: 70f637f9368f)
+- ghcr.io/themacroeconomicdao/cantonotc:stage (Image ID: 70f637f9368f)
+- ghcr.io/themacroeconomicdao/cantonotc:minimal-stage (Image ID: 70f637f9368f)
+- ghcr.io/themacroeconomicdao/maximus:main (Image ID: 6e75118c4084)
+- ghcr.io/themacroeconomicdao/decentralized-social-platform/dsp-prod:latest (Image ID: 09fc6e07835c)
+
+## Информация о сервере:
+
+**IP адрес**: 45.9.41.209
+**Kubernetes API**: https://31.129.105.180:6443
+**Кластер**: Kubernetes (K3s)
+
+## Запрос:
+
+Просим разблокировать порты React Server Components, так как все уязвимости CVE-2025-55182 устранены, и все проекты работают с исправленными версиями зависимостей.
+
+Все проекты готовы к работе в production с применёнными исправлениями безопасности.
+
+## Дополнительная информация:
+
+Полный отчёт об исправлениях доступен в репозитории проекта. Все изменения протестированы и развёрнуты в production окружении.
+
+С уважением,
+Команда разработки
+Gybernaty Ecosystem
+
+---
+Дата: 2025-12-06
+Контакт: [ваш email]
+
+

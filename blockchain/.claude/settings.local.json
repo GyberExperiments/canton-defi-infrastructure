@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl get pods --all-namespaces)",
+      "Bash(kubectl logs -n validator validator-app-695b784589-wtkkx --tail=50)",
+      "Bash(kubectl logs -n validator validator-app-695b784589-wtkkx --tail=100)",
+      "Bash(kubectl logs -n validator participant-5c8bc8496b-hnspj --tail=50)",
+      "Bash(kubectl logs -n validator validator-app-695b784589-wtkkx)"
+    ]
+  }
+}

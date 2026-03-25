@@ -1,0 +1,353 @@
+-- | Escrow Contract
+-- Manages escrow for secure OTC transactions
+module Escrow where
+
+import DA.Time
+import DA.Optional
+import DA.Text as T
+import OtcTypes
+
+-- | Escrow status
+data EscrowStatus
+  = Created         -- ^ Escrow created, awaiting deposit
+  | Deposited       -- ^ Funds deposited
+  | Released        -- ^ Funds released to seller
+  | Refunded        -- ^ Funds refunded to buyer
+  | Disputed        -- ^ Under dispute
+  | Arbitrated      -- ^ Arbitration in progress
+  deriving (Eq, Show)
+
+-- | Escrow template
+-- Three-party escrow with arbiter for dispute resolution
+template Escrow
+  with
+    -- === Identification ===
+    escrowId : Text                  -- ^ Unique escrow ID
+    offerId : Text                   -- ^ Related offer ID
+    tradeId : Optional Text          -- ^ Related trade ID
+
+    -- === Parties ===
+    operator : Party                 -- ^ Platform operator
+    buyer : Party                    -- ^ Buyer (depositor)
+    seller : Party                   -- ^ Seller (recipient)
+    arbiter : Party                  -- ^ Neutral arbiter for disputes
+
+    -- === Escrow Details ===
+    asset : Asset                    -- ^ Asset in escrow
+    amount : Decimal                 -- ^ Amount to be held
+    depositedAmount : Decimal        -- ^ Amount actually deposited
+
+    -- === Terms ===
+    releaseConditions : Text         -- ^ Conditions for release
+    refundConditions : Text          -- ^ Conditions for refund
+
+    -- === Status & Timing ===
+    status : EscrowStatus            -- ^ Current status
+    createdAt : Time                 -- ^ Creation time
+    updatedAt : Time                 -- ^ Last update time
+    deadline : Time                  -- ^ Escrow deadline
+    extensionCount : Int             -- ^ Number of deadline extensions
+    maxExtensions : Int              -- ^ Maximum allowed extensions (default 3)
+
+    -- === Dispute Management ===
+    disputeReason : Optional Text    -- ^ Dispute reason if any
+    arbitrationDecision : Optional Text  -- ^ Arbiter's decision
+    arbiterFavorsBuyer : Optional Bool   -- ^ True = refund buyer, False = release to seller
+
+    -- === Observers ===
+    auditors : [Party]               -- ^ Regulatory observers
+  where
+    signatory operator
+    observer buyer, seller, arbiter :: auditors
+
+    -- === Invariants ===
+    ensure
+      -- Amount validations
+      amount > 0.0 &&
+      depositedAmount >= 0.0 &&
+      depositedAmount <= amount &&
+
+      -- ID validations
+      escrowId /= "" &&
+      offerId /= "" &&
+      releaseConditions /= "" &&
+      refundConditions /= "" &&
+
+      -- Time validations
+      deadline > createdAt &&
+      updatedAt >= createdAt &&
+
+      -- Extension validations
+      extensionCount >= 0 &&
+      maxExtensions > 0 &&
+      extensionCount <= maxExtensions &&
+
+      -- Status consistency
+      (if status == Deposited then depositedAmount == amount else True) &&
+      (if status == Created then depositedAmount == 0.0 else True)
+
+    -- === Choices ===
+
+    -- | Deposit - buyer deposits funds into escrow
+    choice Deposit : ContractId Escrow
+      with
+        depositor : Party
+        depositAmount : Decimal
+        depositProof : Text           -- ^ Proof of deposit (transaction hash)
+        currentTime : Time
+      controller depositor
+      do
+        -- Validation: Only buyer can deposit
+        assertMsg "Only buyer can deposit" (depositor == buyer)
+
+        -- Validation: Must be in Created status
+        assertMsg "Escrow not in created status" (status == Created)
+
+        -- Validation: Deposit amount must match
+        assertMsg "Deposit amount must match escrow amount"
+          (depositAmount == amount)
+
+        -- Validation: Deadline not passed
+        assertMsg "Escrow deadline has passed" (currentTime <= deadline)
+
+        -- Validation: Deposit proof required
+        assertMsg "Deposit proof required" (depositProof /= "")
+
+        -- Update escrow
+        create this with
+          status = Deposited
+          depositedAmount = depositAmount
+          updatedAt = currentTime
+
+    -- | Release - release funds to seller
+    choice Release : ()
+      with
+        releaser : Party
+        releaseProof : Text           -- ^ Proof of delivery/completion
+        currentTime : Time
+      controller releaser
+      do
+        -- Validation: Only buyer or operator can release
+        assertMsg "Only buyer or operator can release funds"
+          (releaser == buyer || releaser == operator)
+
+        -- Validation: Must be deposited
+        assertMsg "Funds not deposited" (status == Deposited)
+
+        -- Validation: Release proof required
+        assertMsg "Release proof required" (releaseProof /= "")
+
+        -- Archive escrow (funds released to seller)
+        pure ()
+
+    -- | Partial release - release partial funds to seller
+    choice PartialRelease : ContractId Escrow
+      with
+        releaser : Party
+        releaseAmount : Decimal       -- ^ Amount to release
+        releaseProof : Text           -- ^ Proof of partial delivery
+        currentTime : Time
+      controller releaser
+      do
+        -- Validation: Only buyer or operator can release
+        assertMsg "Only buyer or operator can partially release funds"
+          (releaser == buyer || releaser == operator)
+
+        -- Validation: Must be deposited
+        assertMsg "Funds not deposited" (status == Deposited)
+
+        -- Validation: Amount within bounds
+        assertMsg "Release amount must be positive" (releaseAmount > 0.0)
+        assertMsg "Release amount exceeds deposited amount"
+          (releaseAmount <= depositedAmount)
+
+        -- Validation: Release proof required
+        assertMsg "Release proof required" (releaseProof /= "")
+
+        -- Create new escrow with reduced amount
+        create this with
+          depositedAmount = depositedAmount - releaseAmount
+          amount = amount - releaseAmount
+          updatedAt = currentTime
+
+    -- | Refund - refund deposited funds to buyer
+    choice Refund : ()
+      with
+        refunder : Party
+        refundReason : Text
+        currentTime : Time
+      controller refunder
+      do
+        -- Validation: Only seller or operator can initiate refund
+        assertMsg "Only seller or operator can refund"
+          (refunder == seller || refunder == operator)
+
+        -- Validation: Must be deposited
+        assertMsg "No funds to refund" (status == Deposited)
+
+        -- Validation: Refund reason required
+        assertMsg "Refund reason required" (refundReason /= "")
+
+        -- Archive escrow (funds refunded to buyer)
+        pure ()
+
+    -- | Dispute - raise a dispute
+    choice Dispute : ContractId Escrow
+      with
+        disputer : Party
+        reason : Text
+        currentTime : Time
+      controller disputer
+      do
+        -- Validation: Only buyer or seller can dispute
+        assertMsg "Only buyer or seller can raise dispute"
+          (disputer == buyer || disputer == seller)
+
+        -- Validation: Must be deposited
+        assertMsg "Can only dispute deposited escrow" (status == Deposited)
+
+        -- Validation: Reason required
+        assertMsg "Dispute reason required" (reason /= "")
+
+        -- Update to disputed status
+        create this with
+          status = Escrow.Disputed
+          disputeReason = Some reason
+          updatedAt = currentTime
+
+    -- | Arbitrate - arbiter makes decision on dispute
+    choice Arbitrate : ContractId Escrow
+      with
+        arbitrator : Party
+        decision : Text               -- ^ Arbitration decision
+        favorBuyer : Bool             -- ^ True = refund, False = release
+        currentTime : Time
+      controller arbitrator
+      do
+        -- Validation: Only designated arbiter can arbitrate
+        assertMsg "Only designated arbiter can decide"
+          (arbitrator == arbiter)
+
+        -- Validation: Must be in disputed status
+        -- FIX P0-11: Changed from /= to == (logic was inverted)
+        assertMsg "Escrow must be in disputed status" (status == Escrow.Disputed)
+
+        -- Validation: Decision required
+        assertMsg "Arbitration decision required" (decision /= "")
+
+        -- Update to arbitrated status with decision
+        create this with
+          status = Arbitrated
+          arbitrationDecision = Some decision
+          arbiterFavorsBuyer = Some favorBuyer
+          updatedAt = currentTime
+
+    -- | Execute arbitration - execute arbiter's decision
+    choice ExecuteArbitration : ()
+      with
+        executor : Party
+        currentTime : Time
+      controller executor
+      do
+        -- Validation: Only operator can execute
+        assertMsg "Only operator can execute arbitration"
+          (executor == operator)
+
+        -- Validation: Must be arbitrated
+        -- FIX P0-12: Changed from /= to == (logic was inverted)
+        assertMsg "Escrow must be arbitrated to execute"
+          (status == Arbitrated)
+
+        -- Validation: Decision must exist
+        assertMsg "Arbitration decision not found"
+          (isSome arbitrationDecision)
+
+        -- Validation: Arbiter's decision must exist
+        assertMsg "Arbiter's decision (favorBuyer) not found"
+          (isSome arbiterFavorsBuyer)
+
+        -- FIX P0-12: Implement favorBuyer logic
+        -- Execute decision based on arbiter's ruling
+        case arbiterFavorsBuyer of
+          Some True -> do
+            -- Arbiter favors buyer - refund to buyer
+            -- In production, this would trigger actual fund transfer
+            pure ()  -- Funds returned to buyer
+          Some False -> do
+            -- Arbiter favors seller - release to seller
+            -- In production, this would trigger actual fund transfer
+            pure ()  -- Funds released to seller
+          None -> abort "Arbiter decision missing"
+
+    -- | Cancel escrow - cancel before deposit
+    choice CancelEscrow : ()
+      with
+        canceller : Party
+        reason : Text
+        currentTime : Time
+      controller canceller
+      do
+        -- Validation: Can only cancel before deposit
+        assertMsg "Cannot cancel deposited escrow" (status == Created)
+
+        -- Validation: Only buyer, seller or operator can cancel
+        assertMsg "Unauthorized to cancel"
+          (canceller == buyer || canceller == seller || canceller == operator)
+
+        -- Validation: Reason required
+        assertMsg "Cancellation reason required" (reason /= "")
+
+        -- Archive escrow
+        pure ()
+
+    -- | Extend deadline - extend escrow deadline
+    choice ExtendDeadline : ContractId Escrow
+      with
+        extender : Party
+        newDeadline : Time
+        currentTime : Time
+      controller extender
+      do
+        -- Validation: Only operator can extend
+        assertMsg "Only operator can extend deadline"
+          (extender == operator)
+
+        -- Validation: Max extensions not exceeded
+        assertMsg "Maximum deadline extensions reached"
+          (extensionCount < maxExtensions)
+
+        -- Validation: New deadline must be in future
+        assertMsg "New deadline must be after current time"
+          (newDeadline > currentTime)
+
+        -- Validation: New deadline must be after current deadline
+        assertMsg "New deadline must extend current deadline"
+          (newDeadline > deadline)
+
+        -- Update deadline and increment extension count
+        create this with
+          deadline = newDeadline
+          extensionCount = extensionCount + 1
+          updatedAt = currentTime
+
+    -- | Auto-expire - automatically expire if deadline passed
+    choice AutoExpire : ()
+      with
+        expirer : Party
+        currentTime : Time
+      controller expirer
+      do
+        -- Validation: Only operator can expire
+        assertMsg "Only operator can expire escrow"
+          (expirer == operator)
+
+        -- Validation: Deadline must be passed
+        assertMsg "Deadline not yet passed" (currentTime > deadline)
+
+        -- Validation: Can only auto-expire Created or Deposited escrows
+        -- FIX: Changed logic - auto-expire active escrows that timeout
+        assertMsg "Can only auto-expire active escrows"
+          (status == Created || status == Deposited)
+
+        -- Archive escrow
+        pure ()

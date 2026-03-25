@@ -1,0 +1,383 @@
+name: 🚀 Auto Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: themacroeconomicdao/cantonotc
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+      
+      - name: 🔐 Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔨 Build Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: 🏷️ Extract image tag
+        id: image-tag
+        run: |
+          # Извлекаем SHA-based тег (формат: main-<sha>)
+          TAGS="${{ steps.meta.outputs.tags }}"
+          IMAGE_TAG=$(echo "$TAGS" | grep -o 'main-[a-f0-9]\+' | head -1)
+          if [ -z "$IMAGE_TAG" ]; then
+            # Fallback: используем последний коммит SHA
+            IMAGE_TAG="main-${{ github.sha }}"
+          fi
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "📦 Image tag: $IMAGE_TAG"
+
+      - name: ☸️ Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: 🔐 Configure kubectl
+        run: |
+          echo "🔐 Настройка kubectl..."
+          mkdir -p ~/.kube
+          
+          # Проверяем наличие секрета
+          if [ -z "${{ secrets.KUBECONFIG }}" ]; then
+            echo "❌ ОШИБКА: Секрет KUBECONFIG не установлен в GitHub Secrets!"
+            echo "📝 Инструкция:"
+            echo "1. Выполните: kubectl config view --minify --raw | base64"
+            echo "2. Скопируйте вывод"
+            echo "3. Добавьте в GitHub: Settings > Secrets and variables > Actions > New repository secret"
+            echo "4. Name: KUBECONFIG, Value: (вставьте base64 строку)"
+            exit 1
+          fi
+          
+          # Декодируем и сохраняем kubeconfig
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config || {
+            echo "❌ ОШИБКА: Не удалось декодировать KUBECONFIG. Проверьте что секрет закодирован в base64."
+            exit 1
+          }
+          chmod 600 ~/.kube/config
+          
+          # Проверяем что файл создан и не пустой
+          if [ ! -s ~/.kube/config ]; then
+            echo "❌ ОШИБКА: Kubeconfig файл пустой или не создан"
+            exit 1
+          fi
+          
+          echo "✅ Kubeconfig сохранен"
+          echo "✅ Тестируем подключение к кластеру..."
+          kubectl cluster-info --request-timeout=30s || {
+            echo "❌ ОШИБКА: Не удалось подключиться к кластеру"
+            echo "💡 Возможные причины:"
+            echo "   - Credentials истекли (нужно обновить секрет KUBECONFIG)"
+            echo "   - Кластер недоступен"
+            echo "   - Неверный формат kubeconfig"
+            exit 1
+          }
+          echo "✅ Подключение к кластеру успешно!"
+
+      - name: 🔐 Setup application secrets
+        run: |
+          echo "🔐 Обновление секретов приложения..."
+          cd config/kubernetes/k8s
+          
+          # Функция для безопасного base64 кодирования
+          safe_b64() {
+            if [ -z "$1" ]; then
+              echo -n "" | base64 | tr -d '\n'
+            else
+              echo -n "$1" | base64 | tr -d '\n'
+            fi
+          }
+          
+          # Кодируем все секреты в base64 (как требует secret.template.yaml)
+          echo "📝 Кодируем секреты в base64..."
+          
+          # Google Sheets Configuration
+          export GOOGLE_SHEET_ID_B64=$(safe_b64 "$GOOGLE_SHEET_ID")
+          export GOOGLE_SERVICE_ACCOUNT_EMAIL_B64=$(safe_b64 "$GOOGLE_SERVICE_ACCOUNT_EMAIL")
+          export GOOGLE_PRIVATE_KEY_B64=$(safe_b64 "$GOOGLE_PRIVATE_KEY")
+          export GOOGLE_SHEETS_RANGE_B64=$(safe_b64 "$GOOGLE_SHEETS_RANGE")
+          
+          # Telegram Bot Configuration
+          export TELEGRAM_BOT_TOKEN_B64=$(safe_b64 "$TELEGRAM_BOT_TOKEN")
+          export TELEGRAM_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_CHAT_ID")
+          export TELEGRAM_CLIENT_GROUP_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_CLIENT_GROUP_CHAT_ID")
+          
+          # Telegram Client API Configuration
+          export TELEGRAM_API_ID_B64=$(safe_b64 "$TELEGRAM_API_ID")
+          export TELEGRAM_API_HASH_B64=$(safe_b64 "$TELEGRAM_API_HASH")
+          export TELEGRAM_SESSION_STRING_B64=$(safe_b64 "$TELEGRAM_SESSION_STRING")
+          
+          # Telegram Mediator Bot Configuration
+          export TELEGRAM_MEDIATOR_BOT_TOKEN_B64=$(safe_b64 "$TELEGRAM_MEDIATOR_BOT_TOKEN")
+          export TELEGRAM_MEDIATOR_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_MEDIATOR_CHAT_ID")
+          export TELEGRAM_MEDIATOR_WEBHOOK_SECRET_B64=$(safe_b64 "$TELEGRAM_MEDIATOR_WEBHOOK_SECRET")
+          
+          # SMTP Configuration
+          export SMTP_HOST_B64=$(safe_b64 "$SMTP_HOST")
+          export SMTP_PORT_B64=$(safe_b64 "$SMTP_PORT")
+          export SMTP_SECURE_B64=$(safe_b64 "$SMTP_SECURE")
+          export SMTP_USER_B64=$(safe_b64 "$SMTP_USER")
+          export SMTP_PASSWORD_B64=$(safe_b64 "$SMTP_PASSWORD")
+          export SMTP_FROM_ADDRESS_B64=$(safe_b64 "$SMTP_FROM_ADDRESS")
+          export SMTP_FROM_NAME_B64=$(safe_b64 "$SMTP_FROM_NAME")
+          
+          # OTC Configuration
+          export USDT_RECEIVING_ADDRESS_B64=$(safe_b64 "$USDT_RECEIVING_ADDRESS")
+          export CANTON_COIN_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_PRICE_USD")
+          export CANTON_COIN_BUY_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_BUY_PRICE_USD")
+          export CANTON_COIN_SELL_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_SELL_PRICE_USD")
+          
+          # Trading Limits
+          export MIN_USDT_AMOUNT_B64=$(safe_b64 "$MIN_USDT_AMOUNT")
+          export MAX_USDT_AMOUNT_B64=$(safe_b64 "$MAX_USDT_AMOUNT")
+          
+          # Receiving Addresses
+          export ETH_RECEIVING_ADDRESS_B64=$(safe_b64 "$ETH_RECEIVING_ADDRESS")
+          export TRON_RECEIVING_ADDRESS_B64=$(safe_b64 "$TRON_RECEIVING_ADDRESS")
+          export SOLANA_RECEIVING_ADDRESS_B64=$(safe_b64 "$SOLANA_RECEIVING_ADDRESS")
+          export OPTIMISM_RECEIVING_ADDRESS_B64=$(safe_b64 "$OPTIMISM_RECEIVING_ADDRESS")
+          
+          # Contact Information
+          export SUPPORT_EMAIL_B64=$(safe_b64 "$SUPPORT_EMAIL")
+          export TELEGRAM_BOT_USERNAME_B64=$(safe_b64 "$TELEGRAM_BOT_USERNAME")
+          export BUSINESS_HOURS_B64=$(safe_b64 "$BUSINESS_HOURS")
+          
+          # Admin Configuration
+          export ADMIN_EMAIL_B64=$(safe_b64 "$ADMIN_EMAIL")
+          export ADMIN_PASSWORD_HASH_B64=$(safe_b64 "$ADMIN_PASSWORD_HASH")
+          export ADMIN_NAME_B64=$(safe_b64 "$ADMIN_NAME")
+          export ADMIN_API_KEY_B64=$(safe_b64 "$ADMIN_API_KEY")
+          
+          # Security
+          export NEXTAUTH_SECRET_B64=$(safe_b64 "$NEXTAUTH_SECRET")
+          export NEXTAUTH_URL_B64=$(safe_b64 "$NEXTAUTH_URL")
+          
+          # HD Wallet and Blockchain Configuration
+          export HD_WALLET_SEED_B64=$(safe_b64 "$HD_WALLET_SEED")
+          export TRON_API_KEY_B64=$(safe_b64 "$TRON_API_KEY")
+          export REDIS_URL_B64=$(safe_b64 "$REDIS_URL")
+          
+          # Intercom Configuration
+          export NEXT_PUBLIC_INTERCOM_APP_ID_B64=$(safe_b64 "$NEXT_PUBLIC_INTERCOM_APP_ID")
+          export INTERCOM_ACCESS_TOKEN_B64=$(safe_b64 "$INTERCOM_ACCESS_TOKEN")
+          export INTERCOM_ADMIN_ID_B64=$(safe_b64 "$INTERCOM_ADMIN_ID")
+          export INTERCOM_WEBHOOK_SECRET_B64=$(safe_b64 "$INTERCOM_WEBHOOK_SECRET")
+          export INTERCOM_API_SECRET_B64=$(safe_b64 "$INTERCOM_API_SECRET")
+          
+          # Supabase Configuration
+          export NEXT_PUBLIC_SUPABASE_URL_B64=$(safe_b64 "$NEXT_PUBLIC_SUPABASE_URL")
+          export SUPABASE_SERVICE_ROLE_KEY_B64=$(safe_b64 "$SUPABASE_SERVICE_ROLE_KEY")
+          
+          # Additional Configuration
+          export ALERT_EMAIL_B64=$(safe_b64 "$ALERT_EMAIL")
+          
+          # GitHub API Configuration
+          export API_TOKEN_B64=$(safe_b64 "$API_TOKEN")
+          export REPO_OWNER_B64=$(safe_b64 "$REPO_OWNER")
+          export REPO_NAME_B64=$(safe_b64 "$REPO_NAME")
+          export WORKFLOW_ID_B64=$(safe_b64 "$WORKFLOW_ID")
+          export WORKFLOW_BRANCH_B64=$(safe_b64 "$WORKFLOW_BRANCH")
+          
+          # NEAR DEX Configuration
+          export NEAR_DEX_FEE_RECIPIENT_B64=$(safe_b64 "$NEAR_DEX_FEE_RECIPIENT")
+          
+          # Rate Limiting Configuration
+          export RATE_LIMIT_ORDER_POINTS_B64=$(safe_b64 "$RATE_LIMIT_ORDER_POINTS")
+          export RATE_LIMIT_ORDER_DURATION_B64=$(safe_b64 "$RATE_LIMIT_ORDER_DURATION")
+          export RATE_LIMIT_IP_POINTS_B64=$(safe_b64 "$RATE_LIMIT_IP_POINTS")
+          export RATE_LIMIT_IP_DURATION_B64=$(safe_b64 "$RATE_LIMIT_IP_DURATION")
+          export RATE_LIMIT_EMAIL_POINTS_B64=$(safe_b64 "$RATE_LIMIT_EMAIL_POINTS")
+          export RATE_LIMIT_EMAIL_DURATION_B64=$(safe_b64 "$RATE_LIMIT_EMAIL_DURATION")
+          
+          # Anti-Spam Configuration
+          export ENABLE_ANTI_SPAM_B64=$(safe_b64 "$ENABLE_ANTI_SPAM")
+          export ANTI_SPAM_DUPLICATE_WINDOW_B64=$(safe_b64 "$ANTI_SPAM_DUPLICATE_WINDOW")
+          export ANTI_SPAM_RAPID_WINDOW_B64=$(safe_b64 "$ANTI_SPAM_RAPID_WINDOW")
+          export ANTI_SPAM_MAX_ORDERS_B64=$(safe_b64 "$ANTI_SPAM_MAX_ORDERS")
+          export ANTI_SPAM_BLOCK_DURATION_B64=$(safe_b64 "$ANTI_SPAM_BLOCK_DURATION")
+          export ANTI_SPAM_CLEANUP_INTERVAL_B64=$(safe_b64 "$ANTI_SPAM_CLEANUP_INTERVAL")
+          
+          echo "✅ Все секреты закодированы в base64"
+          
+          # Создаем секрет из template с подстановкой base64 значений
+          envsubst < secret.template.yaml > secret.yaml
+          
+          kubectl apply -f secret.yaml
+          rm secret.yaml # Убираем файл с секретами
+          echo "✅ Секреты приложения обновлены"
+        env:
+          # Google Sheets Configuration
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_SHEETS_RANGE: ${{ secrets.GOOGLE_SHEETS_RANGE }}
+          
+          # Telegram Bot Configuration
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CLIENT_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_CLIENT_GROUP_CHAT_ID }}
+          
+          # Telegram Client API Configuration
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          
+          # Telegram Mediator Bot Configuration
+          TELEGRAM_MEDIATOR_BOT_TOKEN: ${{ secrets.TELEGRAM_MEDIATOR_BOT_TOKEN }}
+          TELEGRAM_MEDIATOR_CHAT_ID: ${{ secrets.TELEGRAM_MEDIATOR_CHAT_ID }}
+          TELEGRAM_MEDIATOR_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_MEDIATOR_WEBHOOK_SECRET }}
+          
+          # SMTP Configuration
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          
+          # OTC Configuration
+          USDT_RECEIVING_ADDRESS: ${{ secrets.USDT_RECEIVING_ADDRESS }}
+          CANTON_COIN_PRICE_USD: ${{ secrets.CANTON_COIN_PRICE_USD }}
+          CANTON_COIN_BUY_PRICE_USD: ${{ secrets.CANTON_COIN_BUY_PRICE_USD }}
+          CANTON_COIN_SELL_PRICE_USD: ${{ secrets.CANTON_COIN_SELL_PRICE_USD }}
+          
+          # Trading Limits
+          MIN_USDT_AMOUNT: ${{ secrets.MIN_USDT_AMOUNT }}
+          MAX_USDT_AMOUNT: ${{ secrets.MAX_USDT_AMOUNT }}
+          
+          # Receiving Addresses
+          ETH_RECEIVING_ADDRESS: ${{ secrets.ETH_RECEIVING_ADDRESS }}
+          TRON_RECEIVING_ADDRESS: ${{ secrets.TRON_RECEIVING_ADDRESS }}
+          SOLANA_RECEIVING_ADDRESS: ${{ secrets.SOLANA_RECEIVING_ADDRESS }}
+          OPTIMISM_RECEIVING_ADDRESS: ${{ secrets.OPTIMISM_RECEIVING_ADDRESS }}
+          
+          # Contact Information
+          SUPPORT_EMAIL: ${{ secrets.SUPPORT_EMAIL }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          BUSINESS_HOURS: ${{ secrets.BUSINESS_HOURS }}
+          
+          # Admin Configuration
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
+          ADMIN_NAME: ${{ secrets.ADMIN_NAME }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          
+          # Security
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+          
+          # HD Wallet and Blockchain Configuration
+          HD_WALLET_SEED: ${{ secrets.HD_WALLET_SEED }}
+          TRON_API_KEY: ${{ secrets.TRON_API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          
+          # Intercom Configuration
+          NEXT_PUBLIC_INTERCOM_APP_ID: ${{ secrets.NEXT_PUBLIC_INTERCOM_APP_ID }}
+          INTERCOM_ACCESS_TOKEN: ${{ secrets.INTERCOM_ACCESS_TOKEN }}
+          INTERCOM_ADMIN_ID: ${{ secrets.INTERCOM_ADMIN_ID }}
+          INTERCOM_WEBHOOK_SECRET: ${{ secrets.INTERCOM_WEBHOOK_SECRET }}
+          INTERCOM_API_SECRET: ${{ secrets.INTERCOM_API_SECRET }}
+          
+          # Supabase Configuration
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          
+          # Additional Configuration
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          
+          # GitHub API Configuration
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+          WORKFLOW_ID: ${{ secrets.WORKFLOW_ID }}
+          WORKFLOW_BRANCH: ${{ secrets.WORKFLOW_BRANCH }}
+          
+          # NEAR DEX Configuration
+          NEAR_DEX_FEE_RECIPIENT: ${{ secrets.NEAR_DEX_FEE_RECIPIENT }}
+          
+          # Rate Limiting Configuration
+          RATE_LIMIT_ORDER_POINTS: ${{ secrets.RATE_LIMIT_ORDER_POINTS }}
+          RATE_LIMIT_ORDER_DURATION: ${{ secrets.RATE_LIMIT_ORDER_DURATION }}
+          RATE_LIMIT_IP_POINTS: ${{ secrets.RATE_LIMIT_IP_POINTS }}
+          RATE_LIMIT_IP_DURATION: ${{ secrets.RATE_LIMIT_IP_DURATION }}
+          RATE_LIMIT_EMAIL_POINTS: ${{ secrets.RATE_LIMIT_EMAIL_POINTS }}
+          RATE_LIMIT_EMAIL_DURATION: ${{ secrets.RATE_LIMIT_EMAIL_DURATION }}
+          
+          # Anti-Spam Configuration
+          ENABLE_ANTI_SPAM: ${{ secrets.ENABLE_ANTI_SPAM }}
+          ANTI_SPAM_DUPLICATE_WINDOW: ${{ secrets.ANTI_SPAM_DUPLICATE_WINDOW }}
+          ANTI_SPAM_RAPID_WINDOW: ${{ secrets.ANTI_SPAM_RAPID_WINDOW }}
+          ANTI_SPAM_MAX_ORDERS: ${{ secrets.ANTI_SPAM_MAX_ORDERS }}
+          ANTI_SPAM_BLOCK_DURATION: ${{ secrets.ANTI_SPAM_BLOCK_DURATION }}
+          ANTI_SPAM_CLEANUP_INTERVAL: ${{ secrets.ANTI_SPAM_CLEANUP_INTERVAL }}
+
+      - name: 🚀 Deploy to Kubernetes
+        run: |
+          echo "🚀 Deploying to Kubernetes..."
+          
+          IMAGE_TAG="${{ steps.image-tag.outputs.tag }}"
+          FULL_IMAGE="ghcr.io/${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+          
+          echo "📦 Обновляем deployment с образом: $FULL_IMAGE"
+          
+          # Обновляем образ в deployment
+          kubectl set image deployment/canton-otc canton-otc=$FULL_IMAGE -n canton-otc
+          
+          # Ждем завершения rollout
+          echo "⏳ Ожидание завершения rollout..."
+          kubectl rollout status deployment/canton-otc -n canton-otc --timeout=180s
+          
+          echo "✅ Deployment обновлен успешно!"
+
+      - name: ✅ Verify deployment
+        run: |
+          echo "📊 Checking pods status..."
+          kubectl get pods -n canton-otc -l app=canton-otc
+          
+          echo ""
+          echo "📦 Checking image..."
+          kubectl describe deployment canton-otc -n canton-otc | grep "Image:"
+
+      - name: 🧪 Health check
+        run: |
+          echo "🧪 Testing health endpoint..."
+          sleep 10
+          curl -f https://1otc.cc/api/health || echo "⚠️ Health check failed (may need more time)"

@@ -1,0 +1,58 @@
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: trust-setup
+          image: "ghcr.io/digital-asset/decentralized-canton-sync/docker/canton-participant:0.5.7@sha256:c544554c6b2ff92918ee63291be3d57637ea3595c61033e22fe01ce343994cdb"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              CACERTS="/opt/java/openjdk/lib/security/cacerts"
+              DEST="/custom-truststore/cacerts"
+              echo "Copying JVM cacerts from $CACERTS to $DEST"
+              cp "$CACERTS" "$DEST"
+              chmod 644 "$DEST"
+
+              echo "Importing Cumberland-1 cert..."
+              keytool -importcert -noprompt -trustcacerts \
+                -alias cumberland-sv1 \
+                -file /extra-certs/cumberland-1.pem \
+                -keystore "$DEST" \
+                -storepass changeit
+
+              echo "Importing Cumberland-2 cert..."
+              keytool -importcert -noprompt -trustcacerts \
+                -alias cumberland-sv2 \
+                -file /extra-certs/cumberland-2.pem \
+                -keystore "$DEST" \
+                -storepass changeit
+
+              echo "Custom truststore ready with Cumberland certs"
+          volumeMounts:
+            - name: custom-truststore
+              mountPath: /custom-truststore
+            - name: cumberland-certs
+              mountPath: /extra-certs
+      containers:
+        - name: participant
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseG1GC -XX:+UseStringDeduplication -XX:MaxRAMPercentage=75 -XX:InitialRAMPercentage=75 -Dscala.concurrent.context.numThreads=8 -XX:ActiveProcessorCount=8 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/persistent-data -Djavax.net.ssl.trustStore=/custom-truststore/cacerts -Djavax.net.ssl.trustStorePassword=changeit"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 16Gi
+            limits:
+              cpu: "4"
+              memory: 32Gi
+          volumeMounts:
+            - name: custom-truststore
+              mountPath: /custom-truststore
+      volumes:
+        - name: custom-truststore
+          emptyDir: {}
+        - name: cumberland-certs
+          configMap:
+            name: cumberland-certs

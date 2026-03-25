@@ -1,0 +1,76 @@
+# Canton OTC Robots.txt
+# Generated for optimal SEO performance
+
+# Allow all crawlers
+User-agent: *
+Allow: /
+Crawl-delay: 0
+
+# Disallow admin and API endpoints
+Disallow: /api/admin/*
+Disallow: /admin/*
+Disallow: /_next/static/chunks/*
+
+# Specific rules for major search engines
+User-agent: Googlebot
+Allow: /
+Disallow: /api/admin/*
+Disallow: /admin/*
+Crawl-delay: 0
+
+User-agent: Googlebot-Image
+Allow: /
+Allow: /*.jpg$
+Allow: /*.jpeg$
+Allow: /*.png$
+Allow: /*.gif$
+Allow: /*.webp$
+Allow: /*.svg$
+
+User-agent: Bingbot
+Allow: /
+Disallow: /api/admin/*
+Disallow: /admin/*
+Crawl-delay: 0
+
+User-agent: Slurp
+Allow: /
+Disallow: /api/admin/*
+Disallow: /admin/*
+Crawl-delay: 0
+
+User-agent: Yandex
+Allow: /
+Disallow: /api/admin/*
+Disallow: /admin/*
+Crawl-delay: 0
+
+User-agent: DuckDuckBot
+Allow: /
+Disallow: /api/admin/*
+Disallow: /admin/*
+
+User-agent: Baiduspider
+Allow: /
+Disallow: /api/admin/*
+Disallow: /admin/*
+
+# Block bad bots
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /
+
+User-agent: MJ12bot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+# Sitemap location
+Sitemap: https://canton-otc.com/sitemap.xml
+Sitemap: https://canton-otc.com/sitemap-index.xml
+
+# Host directive
+Host: https://canton-otc.com

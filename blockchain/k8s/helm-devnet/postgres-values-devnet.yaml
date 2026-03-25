@@ -1,0 +1,9 @@
+# DevNet overrides for postgres (optional: storage, nodeSelector)
+
+nodeSelector:
+  kubernetes.io/hostname: canton-node-65-108-15-30
+
+# k3s/Rancher: используем local-path (standard-rwo в кластере нет)
+db:
+  volumeStorageClass: local-path
+  volumeSize: 20Gi

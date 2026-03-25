@@ -1,0 +1,263 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-api-stub-code
+  namespace: canton-otc
+data:
+  server.js: |
+    const express = require('express');
+    const crypto = require('crypto');
+
+    const app = express();
+    app.use(express.json());
+
+    const PORT = process.env.PORT || 8080;
+    const CANTON_LEDGER_HOST = process.env.CANTON_LEDGER_HOST || 'participant.validator.svc.cluster.local';
+    const CANTON_LEDGER_PORT = process.env.CANTON_LEDGER_PORT || '5001';
+    const CANTON_APPLICATION_ID = process.env.CANTON_APPLICATION_ID || 'canton-otc-platform';
+    const CANTON_PARTY_ID = process.env.CANTON_PARTY_ID || 'otc_operator';
+
+    // Health endpoint
+    app.get('/health', (req, res) => {
+      res.json({
+        status: 'healthy',
+        connected: true,
+        participant: `http://${CANTON_LEDGER_HOST}:${CANTON_LEDGER_PORT}`,
+        mode: 'stub-mode',
+        ledger_end: new Date().toISOString(),
+        application_id: CANTON_APPLICATION_ID,
+        version: '1.0.0-stub',
+        party_id: CANTON_PARTY_ID,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Create OTC Offer contract
+    app.post('/api/v1/contracts/offer', (req, res) => {
+      const {
+        order_id,
+        initiator,
+        asset,
+        quantity,
+        price,
+        offer_type
+      } = req.body;
+
+      if (!order_id || !initiator || !asset || !quantity || !price || !offer_type) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: order_id, initiator, asset, quantity, price, offer_type'
+        });
+      }
+
+      const contractId = `00${crypto.randomBytes(32).toString('hex')}:${order_id}`;
+      const transactionId = `tx_${crypto.randomBytes(16).toString('hex')}`;
+
+      console.log(`[STUB] Creating OtcOffer contract:`, {
+        order_id,
+        initiator,
+        asset,
+        quantity,
+        price,
+        offer_type,
+        contractId,
+        transactionId
+      });
+
+      res.json({
+        success: true,
+        contract_id: contractId,
+        transaction_id: transactionId,
+        order_id,
+        created_at: new Date().toISOString(),
+        mode: 'stub',
+        message: 'DAML contract creation simulated (stub mode)'
+      });
+    });
+
+    // Get contract by ID
+    app.get('/api/v1/contracts/:id', (req, res) => {
+      const { id } = req.params;
+      console.log(`[STUB] Getting contract: ${id}`);
+      res.json({
+        contract_id: id,
+        status: 'active',
+        created_at: new Date().toISOString(),
+        mode: 'stub'
+      });
+    });
+
+    // Accept offer
+    app.post('/api/v1/contracts/accept', (req, res) => {
+      const { contract_id, acceptor } = req.body;
+      if (!contract_id || !acceptor) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: contract_id, acceptor'
+        });
+      }
+      const transactionId = `tx_accept_${crypto.randomBytes(16).toString('hex')}`;
+      console.log(`[STUB] Accepting contract:`, { contract_id, acceptor, transactionId });
+      res.json({
+        success: true,
+        transaction_id: transactionId,
+        contract_id,
+        status: 'accepted',
+        mode: 'stub'
+      });
+    });
+
+    // Cancel offer
+    app.post('/api/v1/contracts/cancel', (req, res) => {
+      const { contract_id } = req.body;
+      if (!contract_id) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required field: contract_id'
+        });
+      }
+      const transactionId = `tx_cancel_${crypto.randomBytes(16).toString('hex')}`;
+      console.log(`[STUB] Cancelling contract:`, { contract_id, transactionId });
+      res.json({
+        success: true,
+        transaction_id: transactionId,
+        contract_id,
+        status: 'cancelled',
+        mode: 'stub'
+      });
+    });
+
+    // 404 handler
+    app.use((req, res) => {
+      res.status(404).json({
+        error: 'Not found',
+        path: req.path,
+        method: req.method
+      });
+    });
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Canton API Server (Stub Mode) listening on port ${PORT}`);
+      console.log(`📡 Canton Participant: ${CANTON_LEDGER_HOST}:${CANTON_LEDGER_PORT}`);
+      console.log(`🏛️  Application ID: ${CANTON_APPLICATION_ID}`);
+      console.log(`👤 Party ID: ${CANTON_PARTY_ID}`);
+      console.log(`ℹ️  Mode: STUB (for testing without real Canton participant)`);
+    });
+
+  package.json: |
+    {
+      "name": "canton-api-server-stub",
+      "version": "1.0.0",
+      "main": "server.js",
+      "dependencies": {
+        "express": "^4.18.2"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-api-server
+  namespace: canton-otc
+  labels:
+    app: canton-api-server
+    component: ledger-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: canton-api-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: canton-api-server
+        component: ledger-gateway
+    spec:
+      initContainers:
+      - name: npm-install
+        image: node:18-alpine
+        command: ['sh', '-c', 'cp /config/* /app/ && cd /app && npm install --production']
+        volumeMounts:
+        - name: code
+          mountPath: /config
+        - name: app
+          mountPath: /app
+      containers:
+      - name: canton-api-server
+        image: node:18-alpine
+        command: ['node', '/app/server.js']
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: CANTON_LEDGER_HOST
+          value: "participant.validator.svc.cluster.local"
+        - name: CANTON_LEDGER_PORT
+          value: "5001"
+        - name: CANTON_APPLICATION_ID
+          value: "canton-otc-platform"
+        - name: CANTON_PARTY_ID
+          value: "otc_operator"
+        - name: CANTON_LEDGER_ID
+          value: "canton-otc"
+        - name: PORT
+          value: "8080"
+        - name: NODE_ENV
+          value: "production"
+        volumeMounts:
+        - name: app
+          mountPath: /app
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: code
+        configMap:
+          name: canton-api-stub-code
+      - name: app
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-api-server
+  namespace: canton-otc
+  labels:
+    app: canton-api-server
+spec:
+  type: ClusterIP
+  selector:
+    app: canton-api-server
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http

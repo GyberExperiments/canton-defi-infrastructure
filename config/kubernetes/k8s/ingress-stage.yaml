@@ -1,0 +1,58 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canton-otc-stage-ingress-https
+  namespace: canton-otc-stage
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+  - hosts:
+    - stage.build.infra.1otc.cc
+    secretName: canton-otc-stage-tls
+  rules:
+  - host: stage.build.infra.1otc.cc
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: canton-otc-stage-service
+            port:
+              number: 80
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: https-redirect-stage
+  namespace: canton-otc-stage
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canton-otc-stage-ingress-redirect
+  namespace: canton-otc-stage
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: canton-otc-stage-https-redirect-stage@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: stage.build.infra.1otc.cc
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: canton-otc-stage-service
+            port:
+              number: 80

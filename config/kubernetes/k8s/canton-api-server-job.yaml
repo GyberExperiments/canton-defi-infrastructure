@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: canton-api-server-build
+  namespace: canton-otc
+spec:
+  template:
+    spec:
+      containers:
+      - name: builder
+        image: rust:1.77-slim
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
+            echo "Installing build dependencies..."
+            apt-get update && apt-get install -y git ca-certificates pkg-config libssl-dev
+
+            echo "Cloning repository..."
+            git clone --depth 1 https://github.com/themacroeconomicdao/canton-otc.git /tmp/repo || true
+            cd /tmp/repo/cantonnet-omnichain-sdk || exit 1
+
+            echo "Building Canton API Server..."
+            cargo build --release -p canton-api-server
+
+            echo "Binary built successfully:"
+            ls -lh target/release/canton-api-server
+
+            echo "Copying to shared volume..."
+            mkdir -p /shared
+            cp target/release/canton-api-server /shared/
+            chmod +x /shared/canton-api-server
+
+            echo "Build complete! Binary available at /shared/canton-api-server"
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: shared
+        emptyDir: {}
+      restartPolicy: Never
+  backoffLimit: 2

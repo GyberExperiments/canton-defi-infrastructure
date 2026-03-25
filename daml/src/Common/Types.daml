@@ -1,0 +1,73 @@
+-- Common.Types (05_DAML_CONTRACTS_SPEC §2.1)
+module Common.Types where
+
+-- Asset Classes
+data AssetClass =
+    EQUITY
+  | FIXED_INCOME
+  | REAL_ESTATE
+  | COMMODITIES
+  | TREASURY
+  | PRIVATE_CREDIT
+  deriving (Eq, Show)
+
+-- Risk Ratings
+data RiskRating =
+    AAA | AA | A | BBB | BB | B | CCC | CC | C | D
+  deriving (Eq, Show, Ord)
+
+-- Compliance Levels
+data ComplianceLevel =
+    RETAIL
+  | ACCREDITED
+  | QUALIFIED_PURCHASER
+  | INSTITUTIONAL
+  deriving (Eq, Show, Ord)
+
+-- KYC Status
+data KYCStatus =
+    NONE
+  | BASIC
+  | ENHANCED
+  | FULL
+  deriving (Eq, Show, Ord)
+
+-- Jurisdiction
+data Jurisdiction =
+    USA
+  | EU
+  | UK
+  | SINGAPORE
+  | SWITZERLAND
+  | CAYMAN
+  | OTHER Text
+  deriving (Eq, Show)
+
+-- Transaction Status
+data TxStatus =
+    PENDING
+  | CONFIRMED
+  | FAILED
+  | CANCELLED
+  deriving (Eq, Show)
+
+-- Money representation with precision
+data Money = Money with
+  amount: Decimal
+  currency: Text
+  deriving (Eq, Show)
+
+-- Address representation
+data Address = Address with
+  street: Text
+  city: Text
+  state: Optional Text
+  country: Text
+  postalCode: Text
+  deriving (Eq, Show)
+
+-- Date range
+data DateRange = DateRange with
+  startDate: Date
+  endDate: Date
+  deriving (Eq, Show)

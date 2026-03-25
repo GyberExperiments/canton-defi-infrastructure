@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: canton-node
+  labels:
+    name: canton-node
+    app: canton-validator
+    environment: production

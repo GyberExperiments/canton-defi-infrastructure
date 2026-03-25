@@ -1,0 +1,33 @@
+[Unit]
+Description=Canton Validator Node (Direct Host Deployment)
+Documentation=https://docs.daml.com/
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+ConditionPathExists=/opt/canton-validator
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+WorkingDirectory=/opt/canton-validator
+EnvironmentFile=/opt/canton-validator/.env
+
+# Логин в GHCR перед запуском
+ExecStartPre=/usr/bin/bash -c 'if [ -n "${GHCR_TOKEN:-}" ]; then echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${DOCKER_USERNAME:-TheMacroeconomicDao}" --password-stdin || true; fi'
+
+# Запуск docker compose
+ExecStart=/usr/bin/docker compose -f /opt/canton-validator/compose.yaml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/canton-validator/compose.yaml down --remove-orphans
+
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=600
+StartLimitBurst=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=canton-validator
+
+[Install]
+WantedBy=multi-user.target

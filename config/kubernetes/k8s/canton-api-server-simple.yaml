@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: canton-api-server-test
+  namespace: canton-otc
+  labels:
+    app: canton-api-server
+    type: test-pod
+spec:
+  containers:
+  - name: rust-builder
+    image: rust:1.77-slim
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        echo "Installing dependencies..."
+        apt-get update && apt-get install -y ca-certificates git curl
+
+        echo "Cloning SDK (stub mode test)..."
+        cd /tmp
+
+        echo "Creating minimal API server..."
+        cargo new --bin canton-api-server
+        cd canton-api-server
+
+        cat > Cargo.toml << 'EOF'
+        [package]
+        name = "canton-api-server"
+        version = "0.1.0"
+        edition = "2021"
+
+        [dependencies]
+        axum = "0.7"
+        tokio = { version = "1", features = ["full"] }
+        serde = { version = "1", features = ["derive"] }
+        serde_json = "1"
+        tower-http = { version = "0.5", features = ["cors"] }
+        EOF
+
+        cat > src/main.rs << 'EOF'
+        use axum::{routing::get, Json, Router};
+        use serde::Serialize;
+        use tower_http::cors::{Any, CorsLayer};
+
+        #[derive(Serialize)]
+        struct HealthResponse {
+            status: String,
+            connected: bool,
+            mode: String,
+            participant: String,
+        }
+
+        async fn health() -> Json<HealthResponse> {
+            Json(HealthResponse {
+                status: "healthy".to_string(),
+                connected: true,
+                mode: "stub-test".to_string(),
+                participant: "test-mode".to_string(),
+            })
+        }
+
+        #[tokio::main]
+        async fn main() {
+            let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+            let app = Router::new().route("/health", get(health)).layer(cors);
+            let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+            println!("Canton API Server (stub) listening on 0.0.0.0:8080");
+            axum::serve(listener, app).await.unwrap();
+        }
+        EOF
+
+        echo "Building..."
+        cargo build --release
+
+        echo "Starting server..."
+        ./target/release/canton-api-server
+    ports:
+    - containerPort: 8080
+      name: http
+  restartPolicy: Never
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-api-server-test
+  namespace: canton-otc
+spec:
+  selector:
+    app: canton-api-server
+    type: test-pod
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP

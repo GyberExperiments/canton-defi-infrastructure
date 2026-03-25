@@ -1,0 +1,14 @@
+[package]
+name = "bsc-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "BSC/Ethereum provider, contracts (abigen), events, gas, nonce, tx lifecycle"
+
+[dependencies]
+bridge-core = { path = "../bridge-core" }
+ethers = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

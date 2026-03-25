@@ -1,0 +1,300 @@
+-- | Settlement Contract
+-- Manages the settlement process for OTC trades
+module Settlement where
+
+import DA.Time
+import DA.Optional
+import DA.Text as T
+import OtcTypes
+
+-- | Settlement status
+data SettlementStatus
+  = PendingPayment      -- ^ Awaiting payment
+  | PaymentReceived     -- ^ Payment received, awaiting confirmation
+  | Confirming          -- ^ Confirming on blockchain
+  | Completed           -- ^ Settlement completed
+  | Disputed            -- ^ Under dispute
+  | Failed              -- ^ Settlement failed
+  deriving (Eq, Show)
+
+-- | Settlement template
+-- Manages payment confirmation and trade settlement
+template Settlement
+  with
+    -- === Identification ===
+    settlementId : Text              -- ^ Unique settlement ID
+    offerId : Text                   -- ^ Related offer ID
+    tradeId : Text                   -- ^ Related trade ID
+
+    -- === Parties ===
+    operator : Party                 -- ^ Platform operator
+    buyer : Party                    -- ^ Buyer party
+    seller : Party                   -- ^ Seller party
+
+    -- === Settlement Details ===
+    asset : Asset                    -- ^ Asset being settled
+    quantity : Decimal               -- ^ Quantity being settled
+    price : Price                    -- ^ Settlement price
+    totalAmount : Decimal            -- ^ Total settlement amount
+
+    -- === Payment Tracking ===
+    paymentProof : Text              -- ^ Payment proof hash (SHA-256)
+    confirmations : Int              -- ^ Number of confirmations
+    requiredConfirmations : Int      -- ^ Required confirmations
+
+    -- === Status & Timing ===
+    status : SettlementStatus        -- ^ Current status
+    createdAt : Time                 -- ^ Creation time
+    updatedAt : Time                 -- ^ Last update time
+    completedAt : Optional Time      -- ^ Completion time
+    deadline : Time                  -- ^ Settlement deadline
+    extensionCount : Int             -- ^ Number of deadline extensions (max 3)
+
+    -- === Observers ===
+    auditors : [Party]               -- ^ Regulatory observers
+  where
+    signatory operator
+    observer buyer, seller, auditors
+
+    -- === Invariants ===
+    ensure
+      -- Quantity and price validations
+      quantity > 0.0 &&
+      price.rate > 0.0 &&
+      totalAmount > 0.0 &&
+      totalAmount == (quantity * price.rate) &&
+
+      -- Confirmation validations
+      confirmations >= 0 &&
+      requiredConfirmations > 0 &&
+      confirmations <= requiredConfirmations &&
+
+      -- Extension count validation
+      extensionCount >= 0 &&
+      extensionCount <= 3 &&
+
+      -- ID validations
+      settlementId /= "" &&
+      offerId /= "" &&
+      tradeId /= "" &&
+      paymentProof /= "" &&
+
+      -- Time validations
+      deadline > createdAt &&
+      updatedAt >= createdAt &&
+
+      -- Completed time consistency
+      (case completedAt of
+        None -> True
+        Some completed -> completed >= createdAt && completed <= updatedAt)
+
+    -- === Choices ===
+
+    -- | Confirm payment - buyer confirms payment sent
+    choice ConfirmPayment : ContractId Settlement
+      with
+        confirmer : Party
+        paymentTxHash : Text         -- ^ Transaction hash
+        currentTime : Time
+      controller confirmer
+      do
+        -- Validation: Only buyer can confirm payment
+        assertMsg "Only buyer can confirm payment" (confirmer == buyer)
+
+        -- Validation: Must be in pending state
+        assertMsg "Settlement not in pending state" (status == PendingPayment)
+
+        -- Validation: Deadline not passed
+        assertMsg "Settlement deadline has passed" (currentTime <= deadline)
+
+        -- Validation: Payment proof provided
+        assertMsg "Payment transaction hash required" (paymentTxHash /= "")
+
+        -- Validation: Payment hash has reasonable length (min 32 chars)
+        assertMsg "Invalid payment transaction hash" (T.length paymentTxHash >= 32)
+
+        -- Update settlement with payment received
+        create this with
+          status = PaymentReceived
+          paymentProof = paymentTxHash
+          updatedAt = currentTime
+
+    -- | Add confirmation - add blockchain confirmation
+    choice AddConfirmation : ContractId Settlement
+      with
+        confirmer : Party
+        currentTime : Time
+      controller confirmer
+      do
+        -- Validation: Only operator can add confirmations
+        assertMsg "Only operator can add confirmations" (confirmer == operator)
+
+        -- Validation: Must be in PaymentReceived or Confirming state
+        assertMsg "Invalid status for confirmation"
+          (status == PaymentReceived || status == Confirming)
+
+        -- Validation: Not already fully confirmed
+        assertMsg "Already fully confirmed"
+          (confirmations < requiredConfirmations)
+
+        -- Add confirmation
+        let newConfirmations = confirmations + 1
+        let newStatus = if newConfirmations >= requiredConfirmations
+                       then Completed
+                       else Confirming
+        let newCompletedAt = if newConfirmations >= requiredConfirmations
+                            then Some currentTime
+                            else None
+
+        create this with
+          confirmations = newConfirmations
+          status = newStatus
+          completedAt = newCompletedAt
+          updatedAt = currentTime
+
+    -- | Complete settlement - finalize settlement
+    choice CompleteSettlement : ()
+      with
+        completer : Party
+        currentTime : Time
+      controller completer
+      do
+        -- Validation: Only operator can complete
+        assertMsg "Only operator can complete settlement"
+          (completer == operator)
+
+        -- Validation: Must have required confirmations
+        assertMsg "Insufficient confirmations"
+          (confirmations >= requiredConfirmations)
+
+        -- Validation: Must be in Completed status
+        assertMsg "Settlement not in completed status"
+          (status == Completed)
+
+        pure ()
+
+    -- | Dispute settlement - raise dispute
+    choice DisputeSettlement : ContractId Settlement
+      with
+        disputer : Party
+        reason : Text
+        currentTime : Time
+      controller disputer
+      do
+        -- Validation: Must be involved party
+        assertMsg "Only involved parties can dispute"
+          (disputer == buyer || disputer == seller || disputer == operator)
+
+        -- Validation: Cannot dispute completed settlement
+        assertMsg "Cannot dispute completed settlement"
+          (status /= Completed)
+
+        -- Validation: Reason required
+        assertMsg "Dispute reason required" (reason /= "")
+
+        -- Update to disputed status
+        create this with
+          status = Settlement.Disputed
+          updatedAt = currentTime
+
+    -- | Resolve dispute - resolve and continue or fail settlement
+    choice ResolveDispute : ContractId Settlement
+      with
+        resolver : Party
+        resolution : Text             -- ^ Resolution decision
+        continueSettlement : Bool     -- ^ True to continue, False to fail
+        currentTime : Time
+      controller resolver
+      do
+        -- Validation: Only operator can resolve
+        assertMsg "Only operator can resolve disputes"
+          (resolver == operator)
+
+        -- Validation: Must be in disputed status
+        -- FIX P0-10: Changed from /= to == (logic was inverted)
+        assertMsg "Settlement must be in disputed status"
+          (status == Settlement.Disputed)
+
+        -- Validation: Resolution required
+        assertMsg "Resolution decision required" (resolution /= "")
+
+        -- Update based on resolution
+        let newStatus = if continueSettlement
+                       then Confirming
+                       else Failed
+
+        create this with
+          status = newStatus
+          updatedAt = currentTime
+
+    -- | Fail settlement - mark settlement as failed
+    choice FailSettlement : ()
+      with
+        failer : Party
+        reason : Text
+        currentTime : Time
+      controller failer
+      do
+        -- Validation: Only operator can fail
+        assertMsg "Only operator can fail settlement"
+          (failer == operator)
+
+        -- Validation: Cannot fail completed settlement
+        assertMsg "Cannot fail completed settlement"
+          (status /= Completed)
+
+        -- Validation: Reason required
+        assertMsg "Failure reason required" (reason /= "")
+
+        pure ()
+
+    -- | Extend deadline - extend settlement deadline
+    choice ExtendDeadline : ContractId Settlement
+      with
+        extender : Party
+        newDeadline : Time
+        currentTime : Time
+      controller extender
+      do
+        -- Validation: Only operator can extend
+        assertMsg "Only operator can extend deadline"
+          (extender == operator)
+
+        -- Validation: Maximum 3 extensions allowed
+        assertMsg "Maximum 3 deadline extensions allowed"
+          (extensionCount < 3)
+
+        -- Validation: New deadline must be in future
+        assertMsg "New deadline must be after current time"
+          (newDeadline > currentTime)
+
+        -- Validation: New deadline must be after current deadline
+        assertMsg "New deadline must be after current deadline"
+          (newDeadline > deadline)
+
+        -- Update deadline and increment extension count
+        create this with
+          deadline = newDeadline
+          extensionCount = extensionCount + 1
+          updatedAt = currentTime
+
+    -- | Timeout settlement - automatically fail settlement after deadline
+    choice TimeoutSettlement : ()
+      with
+        timeoutOperator : Party
+        currentTime : Time
+      controller timeoutOperator
+      do
+        -- Validation: Only operator can timeout
+        assertMsg "Only operator can timeout settlement"
+          (timeoutOperator == operator)
+
+        -- Validation: Deadline must have passed
+        assertMsg "Settlement deadline not yet passed"
+          (currentTime > deadline)
+
+        -- Validation: Can only timeout pending or payment received settlements
+        assertMsg "Can only timeout pending settlements"
+          (status == PendingPayment || status == PaymentReceived)
+
+        pure ()

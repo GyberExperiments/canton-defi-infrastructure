@@ -1,0 +1,113 @@
+version: "3.8"
+
+# Canton OTC Local Test Environment
+# Runs: Canton sandbox + DAML build + Rust API server
+# Usage: docker compose -f docker-compose.local-test.yml up
+
+services:
+  # ============================================================
+  # Canton Sandbox: domain + participant in one container
+  # ============================================================
+  canton-sandbox:
+    image: digitalasset/canton-open-source:2.7.9
+    container_name: canton-sandbox
+    command:
+      - daemon
+      - --config
+      - /canton/sandbox.conf
+    volumes:
+      - ./local-test/canton-config/sandbox.conf:/canton/sandbox.conf:ro
+    ports:
+      - "5011:5011" # Ledger API
+      - "5012:5012" # Admin API
+      - "5021:5021" # Domain Public API
+      - "5022:5022" # Domain Admin API
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "grpcurl",
+          "-plaintext",
+          "localhost:5011",
+          "grpc.health.v1.Health/Check",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - canton-local
+
+  # ============================================================
+  # DAML Builder: builds DAR and uploads to participant
+  # ============================================================
+  daml-deploy:
+    image: digitalasset/daml-sdk:2.7.9
+    container_name: daml-deploy
+    depends_on:
+      canton-sandbox:
+        condition: service_healthy
+    volumes:
+      - ./canton/daml:/daml-src:ro
+      - ./local-test/scripts:/scripts:ro
+      - daml-dist:/daml-dist
+    entrypoint: /scripts/build-and-deploy.sh
+    environment:
+      LEDGER_HOST: canton-sandbox
+      LEDGER_PORT: "5011"
+      ADMIN_HOST: canton-sandbox
+      ADMIN_PORT: "5012"
+    networks:
+      - canton-local
+
+  # ============================================================
+  # Rust OTC API Server
+  # ============================================================
+  canton-otc-api:
+    build:
+      context: ./cantonnet-omnichain-sdk
+      dockerfile: docker/Dockerfile.api-server
+    container_name: canton-otc-api
+    depends_on:
+      daml-deploy:
+        condition: service_completed_successfully
+    volumes:
+      - daml-dist:/daml-dist:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        # Load OTC_PACKAGE_ID from daml-deploy output
+        if [ -f /daml-dist/env.sh ]; then
+          echo "Loading package ID from /daml-dist/env.sh"
+          . /daml-dist/env.sh
+          export OTC_PACKAGE_ID
+          echo "OTC_PACKAGE_ID=$$OTC_PACKAGE_ID"
+        else
+          echo "WARNING: /daml-dist/env.sh not found, using placeholder"
+        fi
+        exec /app/canton-otc-api
+    environment:
+      CANTON_LEDGER_HOST: canton-sandbox
+      CANTON_LEDGER_PORT: "5011"
+      CANTON_APPLICATION_ID: canton-otc-platform
+      CANTON_PARTY_ID: "otc_operator::sandbox"
+      CANTON_LEDGER_ID: canton-otc
+      PORT: "8080"
+      RUST_LOG: canton_otc_api=debug,canton_ledger_api=info
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - canton-local
+
+volumes:
+  daml-dist:
+
+networks:
+  canton-local:
+    driver: bridge

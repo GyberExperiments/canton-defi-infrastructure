@@ -1,0 +1,61 @@
+# 🐳 Canton OTC - Docker Compose Template для локальной разработки
+#
+# ИСПОЛЬЗОВАНИЕ:
+# 1. Скопируйте этот файл: cp docker-compose.local.example.yml docker-compose.local.yml
+# 2. Создайте .env.local из env.template: cp env.template .env.local
+# 3. Отредактируйте .env.local (минимум: NEXTAUTH_SECRET, NEXTAUTH_URL)
+# 4. Запустите: docker-compose -f docker-compose.local.yml up -d --build
+#
+# Остановка: docker-compose -f docker-compose.local.yml down
+# Логи: docker-compose -f docker-compose.local.yml logs -f
+
+version: '3.8'
+
+services:
+  canton-otc:
+    build:
+      context: .
+      dockerfile: config/docker/Dockerfile
+    container_name: canton-otc-local
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.local
+    environment:
+      - NODE_ENV=production
+      - HOSTNAME=0.0.0.0
+      - PORT=3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - canton-network
+
+  # Опционально: Redis для rate limiting и кэширования
+  redis:
+    image: redis:7-alpine
+    container_name: canton-otc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - canton-network
+
+networks:
+  canton-network:
+    driver: bridge
+
+volumes:
+  redis-data:

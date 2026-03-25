@@ -1,0 +1,460 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-otc
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    version: v1.0.0
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: canton-otc
+  template:
+    metadata:
+      labels:
+        app: canton-otc
+        version: v1.0.0
+    spec:
+      serviceAccountName: canton-otc-configmap-manager
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: canton-otc
+        image: ghcr.io/themacroeconomicdao/cantonotc:main
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        # Public environment variables
+        - name: NODE_ENV
+          value: "production"
+        - name: NEXT_TELEMETRY_DISABLED
+          value: "1"
+        - name: PORT
+          value: "3000"
+        - name: NEXT_PUBLIC_APP_URL
+          value: "https://1otc.cc"
+        
+        # Sensitive data from Secret
+        - name: GOOGLE_SHEET_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: GOOGLE_SHEET_ID
+        - name: GOOGLE_SERVICE_ACCOUNT_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        - name: GOOGLE_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: GOOGLE_PRIVATE_KEY
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TELEGRAM_BOT_TOKEN
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TELEGRAM_CHAT_ID
+        # ✅ Telegram Client Group (группа для заявок клиентов)
+        - name: TELEGRAM_CLIENT_GROUP_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TELEGRAM_CLIENT_GROUP_CHAT_ID
+        
+        # Telegram Client API Configuration (для отправки сообщений от администратора)
+        - name: TELEGRAM_API_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TELEGRAM_API_ID
+        - name: TELEGRAM_API_HASH
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TELEGRAM_API_HASH
+        - name: TELEGRAM_SESSION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TELEGRAM_SESSION_STRING
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_HOST
+        - name: SMTP_PORT
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_PORT
+        - name: SMTP_SECURE
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_SECURE
+        - name: SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_USER
+              optional: false
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_PASSWORD
+              optional: false
+        - name: SMTP_FROM_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_FROM_ADDRESS
+        - name: SMTP_FROM_NAME
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SMTP_FROM_NAME
+        - name: USDT_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: USDT_RECEIVING_ADDRESS
+              optional: false
+        - name: CANTON_COIN_PRICE_USD
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: CANTON_COIN_PRICE_USD
+        - name: ADMIN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ADMIN_API_KEY
+        - name: NEXTAUTH_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: NEXTAUTH_SECRET
+        - name: NEXTAUTH_URL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: NEXTAUTH_URL
+        
+        # Intercom Configuration
+        - name: NEXT_PUBLIC_INTERCOM_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: NEXT_PUBLIC_INTERCOM_APP_ID
+        - name: INTERCOM_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: INTERCOM_ACCESS_TOKEN
+        
+        # ========================================
+        # NEAR INTENTS КОНФИГУРАЦИЯ (ИЗ CONFIGMAP)
+        # ========================================
+        - name: NEXT_PUBLIC_NEAR_NETWORK
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: NEXT_PUBLIC_NEAR_NETWORK
+        - name: NEAR_INTENTS_VERIFIER_CONTRACT
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: NEAR_INTENTS_VERIFIER_CONTRACT
+        - name: NEAR_RPC_URL
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: NEAR_RPC_URL
+        - name: NEAR_ARCHIVAL_RPC_URL
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: NEAR_ARCHIVAL_RPC_URL
+        - name: NEAR_WALLET_URL
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: NEAR_WALLET_URL
+        - name: NEAR_DEX_FEE_RECIPIENT
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: NEAR_DEX_FEE_RECIPIENT
+              optional: false
+        - name: INTERCOM_ADMIN_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: INTERCOM_ADMIN_ID
+        
+        # Supabase Configuration
+        - name: NEXT_PUBLIC_SUPABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: NEXT_PUBLIC_SUPABASE_URL
+        - name: SUPABASE_SERVICE_ROLE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SUPABASE_SERVICE_ROLE_KEY
+        
+        # Canton Coin Prices (из ConfigMap для динамического управления из админки)
+        - name: CANTON_COIN_BUY_PRICE_USD
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: CANTON_COIN_BUY_PRICE_USD
+        - name: CANTON_COIN_SELL_PRICE_USD
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: CANTON_COIN_SELL_PRICE_USD
+        
+        # Trading Limits (из ConfigMap для динамического управления из админки)
+        - name: MIN_USDT_AMOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: MIN_USDT_AMOUNT
+        - name: MAX_USDT_AMOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: MAX_USDT_AMOUNT
+              optional: false
+        
+        
+        # Receiving Addresses
+        - name: ETH_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ETH_RECEIVING_ADDRESS
+        - name: TRON_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TRON_RECEIVING_ADDRESS
+        - name: SOLANA_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: SOLANA_RECEIVING_ADDRESS
+        - name: OPTIMISM_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: OPTIMISM_RECEIVING_ADDRESS
+        
+        # Contact Information (из ConfigMap для динамического управления из админки)
+        - name: SUPPORT_EMAIL
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: SUPPORT_EMAIL
+        - name: TELEGRAM_BOT_USERNAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: TELEGRAM_BOT_USERNAME
+        - name: TELEGRAM_SERVICE_BOT_USERNAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: TELEGRAM_SERVICE_BOT_USERNAME
+        - name: TELEGRAM_OPERATOR_USERNAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: TELEGRAM_OPERATOR_USERNAME
+        - name: BUSINESS_HOURS
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: BUSINESS_HOURS
+        
+        # Google Sheets Configuration
+        - name: GOOGLE_SHEET_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: GOOGLE_SHEET_NAME
+        - name: GOOGLE_SHEETS_RANGE
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: GOOGLE_SHEETS_RANGE
+        
+        # Admin Configuration
+        - name: ADMIN_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ADMIN_EMAIL
+        - name: ADMIN_PASSWORD_HASH
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ADMIN_PASSWORD_HASH
+        - name: ADMIN_NAME
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ADMIN_NAME
+        
+        # HD Wallet and Blockchain Configuration
+        - name: HD_WALLET_SEED
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: HD_WALLET_SEED
+        - name: TRON_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: TRON_API_KEY
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: REDIS_URL
+        
+        # ========================================
+        # KUBERNETES CONFIG (для динамического управления ConfigMap)
+        # ========================================
+        - name: K8S_NAMESPACE
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: K8S_NAMESPACE
+        - name: K8S_CONFIGMAP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-otc-config
+              key: K8S_CONFIGMAP_NAME
+        
+        # Rate Limiting Configuration
+        - name: RATE_LIMIT_ORDER_POINTS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: RATE_LIMIT_ORDER_POINTS
+              optional: false
+        - name: RATE_LIMIT_ORDER_DURATION
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: RATE_LIMIT_ORDER_DURATION
+              optional: false
+        - name: RATE_LIMIT_IP_POINTS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: RATE_LIMIT_IP_POINTS
+              optional: false
+        - name: RATE_LIMIT_IP_DURATION
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: RATE_LIMIT_IP_DURATION
+              optional: false
+        - name: RATE_LIMIT_EMAIL_POINTS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: RATE_LIMIT_EMAIL_POINTS
+              optional: false
+        - name: RATE_LIMIT_EMAIL_DURATION
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: RATE_LIMIT_EMAIL_DURATION
+              optional: false
+        
+        # Anti-Spam Configuration
+        - name: ENABLE_ANTI_SPAM
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ENABLE_ANTI_SPAM
+              optional: false
+        - name: ANTI_SPAM_DUPLICATE_WINDOW
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ANTI_SPAM_DUPLICATE_WINDOW
+              optional: false
+        - name: ANTI_SPAM_RAPID_WINDOW
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ANTI_SPAM_RAPID_WINDOW
+              optional: false
+        - name: ANTI_SPAM_MAX_ORDERS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ANTI_SPAM_MAX_ORDERS
+              optional: false
+        - name: ANTI_SPAM_BLOCK_DURATION
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ANTI_SPAM_BLOCK_DURATION
+              optional: false
+        - name: ANTI_SPAM_CLEANUP_INTERVAL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets
+              key: ANTI_SPAM_CLEANUP_INTERVAL
+              optional: false
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 60  # ✅ Увеличиваем время на startup
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 5      # ✅ Больше попыток
+        
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30  # ✅ Увеличиваем время на startup
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5      # ✅ Больше попыток
+

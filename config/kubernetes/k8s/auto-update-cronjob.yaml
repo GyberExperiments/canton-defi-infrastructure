@@ -1,0 +1,100 @@
+---
+# 🔄 Auto-Update CronJob для Canton OTC
+# Автоматически проверяет и обновляет deployment при изменении образа в registry
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: canton-otc-auto-update
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    component: auto-updater
+spec:
+  # Запускается каждые 6 часов
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: canton-otc
+            component: auto-updater
+        spec:
+          serviceAccountName: canton-otc-updater
+          restartPolicy: OnFailure
+          containers:
+          - name: kubectl
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "🔄 Checking for image updates..."
+              
+              # Получаем текущий образ
+              CURRENT_IMAGE=$(kubectl get deployment canton-otc -n canton-otc -o jsonpath='{.spec.template.spec.containers[0].image}')
+              echo "Current image: $CURRENT_IMAGE"
+              
+              # Проверяем последний коммит в main
+              LATEST_COMMIT=$(curl -s https://api.github.com/repos/TheMacroeconomicDao/CantonOTC/commits/main | grep -o '"sha":"[^"]*' | head -1 | cut -d'"' -f4 | cut -c1-7)
+              echo "Latest commit: $LATEST_COMMIT"
+              
+              # Проверяем существует ли образ с этим тегом
+              IMAGE_TAG="ghcr.io/themacroeconomicdao/cantonotc:main"
+              
+              # Если образ обновился, перезапускаем deployment
+              echo "🔄 Restarting deployment to pull latest image..."
+              kubectl rollout restart deployment/canton-otc -n canton-otc
+              
+              echo "✅ Auto-update completed"
+            imagePullPolicy: IfNotPresent
+
+---
+# ServiceAccount для CronJob
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canton-otc-updater
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    component: auto-updater
+
+---
+# ClusterRole для доступа к deployments
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: canton-otc-updater
+  labels:
+    app: canton-otc
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: canton-otc-updater
+  labels:
+    app: canton-otc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: canton-otc-updater
+subjects:
+- kind: ServiceAccount
+  name: canton-otc-updater
+  namespace: canton-otc
+

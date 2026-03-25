@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: solver-node-config
+  namespace: canton-otc
+  labels:
+    app: solver-node
+data:
+  # ✅ SECURITY FIX: Критические секреты (SOLVER_PRIVATE_KEY, SOLVER_ACCOUNT_ID) теперь в GitHub Secrets
+  # Непубличные настройки остаются здесь
+  SOLVER_MIN_PROFIT_THRESHOLD: "0.1"
+  SOLVER_POLLING_INTERVAL: "2000"
+  SOLVER_MAX_GAS_COST: "0.01"
+  PRICE_ORACLE_ENABLED: "true"
+  REF_FINANCE_API: "https://indexer.ref-finance.near.org"
+  LOG_LEVEL: "info"
+  # NEAR_NETWORK, NEAR_RPC_URL, NEAR_INTENTS_CONTRACT теперь берутся из GitHub Secrets через External Secrets
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solver-node
+  namespace: canton-otc
+  labels:
+    app: solver-node
+    version: v1
+spec:
+  replicas: 1  # Only 1 solver instance per account
+  selector:
+    matchLabels:
+      app: solver-node
+  strategy:
+    type: Recreate  # Important: only one solver at a time
+  template:
+    metadata:
+      labels:
+        app: solver-node
+        version: v1
+    spec:
+      containers:
+      - name: solver-node
+        image: ghcr.io/themacroeconomicdao/solver-node:latest
+        imagePullPolicy: Always
+        
+        envFrom:
+        - configMapRef:
+            name: solver-node-config
+        - secretRef:
+            # ✅ SECURITY FIX: Используем секреты из External Secrets (GitHub Secrets)
+            # Для minimal-stage: name: canton-otc-secrets-minimal-stage
+            # Для production: создайте отдельный External Secret и укажите его здесь
+            name: canton-otc-secrets-minimal-stage
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        livenessProbe:
+          exec:
+            command:
+            - node
+            - -e
+            - "process.exit(0)"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "pgrep -f 'node dist/index.js'"
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      
+      imagePullSecrets:
+      - name: ghcr-secret
+      
+      restartPolicy: Always
+
+---
+# Optional: Service for monitoring (if needed)
+apiVersion: v1
+kind: Service
+metadata:
+  name: solver-node
+  namespace: canton-otc
+  labels:
+    app: solver-node
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+  selector:
+    app: solver-node

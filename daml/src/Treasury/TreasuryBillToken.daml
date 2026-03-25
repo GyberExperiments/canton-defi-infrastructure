@@ -1,0 +1,125 @@
+-- Treasury.TreasuryBillToken (05_DAML_CONTRACTS_SPEC §3.1)
+module Treasury.TreasuryBillToken where
+
+import Common.Types
+import Common.Compliance
+import DA.Date
+import DA.Optional
+import Treasury.TreasuryBillHolding
+import Treasury.YieldDistribution
+
+template TreasuryBillToken
+  with
+    tokenId: Text
+    cusip: Text
+    isin: Optional Text
+    issuer: Party
+    custodian: Party
+    regulator: Optional Party
+    faceValue: Decimal
+    totalSupply: Decimal
+    outstandingSupply: Decimal
+    pricePerToken: Decimal
+    maturityDate: Date
+    issueDate: Date
+    couponRate: Decimal
+    couponFrequency: Int
+    minInvestment: Decimal
+    maxInvestment: Optional Decimal
+    requiredComplianceLevel: ComplianceLevel
+    allowedJurisdictions: [Jurisdiction]
+    description: Text
+    documentHash: Text
+    createdAt: Time
+  where
+    signatory issuer, custodian
+    observer regulator
+
+    ensure
+      faceValue > 0.0 &&
+      totalSupply > 0.0 &&
+      outstandingSupply <= totalSupply &&
+      pricePerToken > 0.0 &&
+      maturityDate > issueDate
+
+    nonconsuming choice PurchaseTokens : ContractId TreasuryBillHolding
+      with
+        buyer: Party
+        purchaseAmount: Decimal
+        compliance: ComplianceRecord
+        paymentReference: Text
+      controller buyer
+      do
+        assertMsg "Buyer does not meet compliance requirements" $
+          checkCompliance compliance requiredComplianceLevel
+
+        assertMsg "Buyer jurisdiction not allowed" $
+          checkJurisdiction compliance.jurisdiction allowedJurisdictions
+
+        let tokenAmount = purchaseAmount / pricePerToken
+        assertMsg "Below minimum investment" $
+          purchaseAmount >= minInvestment
+
+        assertMsg "Exceeds maximum investment" $
+          case maxInvestment of
+            None -> True
+            Some max -> purchaseAmount <= max
+
+        assertMsg "Insufficient supply" $
+          tokenAmount <= outstandingSupply
+
+        now <- getTime
+        create TreasuryBillHolding with
+          tokenId
+          holder = buyer
+          custodian
+          amount = tokenAmount
+          purchasePrice = pricePerToken
+          purchaseDate = toDateUTC now
+          compliance
+
+    consuming choice UpdatePrice : ContractId TreasuryBillToken
+      with
+        newPrice: Decimal
+        oracleSignature: Text
+      controller custodian
+      do
+        assertMsg "Invalid price" $ newPrice > 0.0
+        create this with pricePerToken = newPrice
+
+    nonconsuming choice DistributeYield : [ContractId YieldPayment]
+      with
+        totalYield: Decimal
+        distributionDate: Date
+        holdingCids: [ContractId TreasuryBillHolding]
+      controller custodian
+      do
+        sequence (map (\holdingCid -> do
+          holding <- fetch holdingCid
+          let yieldAmount = (holding.amount / outstandingSupply) * totalYield
+          create YieldPayment with
+            tokenId
+            recipient = holding.holder
+            amount = yieldAmount
+            distributionDate
+            status = PENDING
+          ) holdingCids)
+
+    nonconsuming choice RedeemAtMaturity : ContractId RedemptionReceipt
+      with
+        holdingCid: ContractId TreasuryBillHolding
+      controller custodian
+      do
+        now <- getTime
+        let today = toDateUTC now
+        assertMsg "Not yet mature" $ today >= maturityDate
+
+        holding <- fetch holdingCid
+        archive holdingCid
+
+        create RedemptionReceipt with
+          tokenId
+          redeemer = holding.holder
+          amount = holding.amount * faceValue
+          redemptionDate = today
+          status = PENDING

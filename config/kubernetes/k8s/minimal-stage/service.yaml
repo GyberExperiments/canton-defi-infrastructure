@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-otc-service
+  namespace: canton-otc-minimal-stage
+  labels:
+    app: canton-otc
+    environment: minimal-stage
+spec:
+  selector:
+    app: canton-otc
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+  type: ClusterIP

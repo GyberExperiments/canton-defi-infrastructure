@@ -1,0 +1,34 @@
+# Canton ↔ BSC Bridge — конфигурация (см. CANTON_BSC_BRIDGE_READY_PROMPT Part 12)
+# Секреты — из env (DATABASE_URL, BRIDGE_BSC_PRIVATE_KEY, CANTON_JWT_SECRET, BRIDGE_ADMIN_API_KEY)
+
+canton:
+  grpc_url: "http://127.0.0.1:30501"
+  ledger_id: "participant"
+  application_id: "bridge-service"
+  operator_party: "bridge-operator::..."
+  tls: false
+
+bsc:
+  rpc_url: "https://bsc-dataseed.binance.org/"
+  ws_url: "wss://bsc-ws-node.nariox.org:443"
+  bridge_contract_address: "0x..."
+  required_confirmations: 12
+  chain_id: 56
+
+db:
+  url: "postgres://user:pass@localhost:5432/bridge"
+  max_connections: 10
+
+limits:
+  max_concurrent_transfers: 50
+  max_retries: 5
+  daily_volume_limit: null
+
+recovery:
+  retry_base_delay_sec: 5
+  retry_max_delay_sec: 300
+  orphan_in_flight_minutes: 15
+
+api:
+  listen: "0.0.0.0:8080"
+  admin_api_key_env: "BRIDGE_ADMIN_API_KEY"

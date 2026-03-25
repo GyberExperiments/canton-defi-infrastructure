@@ -1,0 +1,129 @@
+# ArgoCD AppProject для Canton OTC Exchange
+# Определяет политики безопасности и доступа для приложения
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: canton-otc-project
+  namespace: argocd
+  labels:
+    app: canton-otc
+    environment: minimal-stage
+    managed-by: argocd
+spec:
+  # Описание проекта
+  description: "Canton OTC Exchange - GitOps managed application"
+  
+  # Разрешенные источники
+  sourceRepos:
+  - https://github.com/TheMacroeconomicDao/CantonOTC
+  - https://github.com/TheMacroeconomicDao/*
+  - https://github.com/argoproj/*
+  - https://github.com/external-secrets/*
+  
+  # Разрешенные кластеры
+  destinations:
+  - namespace: canton-otc-minimal-stage
+    server: https://kubernetes.default.svc
+  - namespace: external-secrets-system
+    server: https://kubernetes.default.svc
+  - namespace: argocd
+    server: https://kubernetes.default.svc
+  
+  # Разрешенные типы ресурсов
+  clusterResourceWhitelist:
+  - group: ""
+    kind: Namespace
+  - group: ""
+    kind: Service
+  - group: ""
+    kind: ConfigMap
+  - group: ""
+    kind: Secret
+  - group: apps
+    kind: Deployment
+  - group: apps
+    kind: Service
+  - group: networking.k8s.io
+    kind: Ingress
+  - group: external-secrets.io
+    kind: SecretStore
+  - group: external-secrets.io
+    kind: ExternalSecret
+  - group: argoproj.io
+    kind: Application
+  - group: argoproj.io
+    kind: AppProject
+  
+  # Разрешенные namespace ресурсы
+  namespaceResourceWhitelist:
+  - group: ""
+    kind: Service
+  - group: ""
+    kind: ConfigMap
+  - group: ""
+    kind: Secret
+  - group: apps
+    kind: Deployment
+  - group: apps
+    kind: Service
+  - group: networking.k8s.io
+    kind: Ingress
+  - group: external-secrets.io
+    kind: SecretStore
+  - group: external-secrets.io
+    kind: ExternalSecret
+  
+  # Роли и политики
+  roles:
+  - name: canton-otc-admin
+    description: "Canton OTC Exchange Administrator"
+    policies:
+    - p, proj:canton-otc-project:canton-otc-admin, applications, *, canton-otc-project/*, allow
+    - p, proj:canton-otc-project:canton-otc-admin, repositories, *, *, allow
+    - p, proj:canton-otc-project:canton-otc-admin, certificates, *, *, allow
+    - p, proj:canton-otc-project:canton-otc-admin, accounts, *, *, allow
+    - p, proj:canton-otc-project:canton-otc-admin, gpgkeys, *, *, allow
+    groups:
+    - canton-otc-admins
+  
+  - name: canton-otc-developer
+    description: "Canton OTC Exchange Developer"
+    policies:
+    - p, proj:canton-otc-project:canton-otc-developer, applications, get, canton-otc-project/*, allow
+    - p, proj:canton-otc-project:canton-otc-developer, applications, sync, canton-otc-project/*, allow
+    - p, proj:canton-otc-project:canton-otc-developer, applications, action/*, canton-otc-project/*, allow
+    groups:
+    - canton-otc-developers
+  
+  # Политики синхронизации
+  syncWindows:
+  - kind: allow
+    schedule: "0 0 * * *"  # Разрешить синхронизацию в полночь
+    duration: 1h
+    applications:
+    - canton-otc-minimal-stage
+    namespaces:
+    - canton-otc-minimal-stage
+    clusters:
+    - https://kubernetes.default.svc
+  
+  - kind: deny
+    schedule: "0 9-17 * * 1-5"  # Запретить синхронизацию в рабочее время
+    duration: 8h
+    applications:
+    - canton-otc-minimal-stage
+    namespaces:
+    - canton-otc-minimal-stage
+    clusters:
+    - https://kubernetes.default.svc
+  
+  # Политики безопасности
+  signatureKeys:
+  - keyID: "canton-otc-signing-key"
+    keyType: "GPG"
+  
+  # Разрешенные источники для подписей
+  sourceNamespaces:
+  - argocd
+  - canton-otc-minimal-stage

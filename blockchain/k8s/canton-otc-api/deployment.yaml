@@ -1,0 +1,105 @@
+---
+# Canton OTC API server — Deployment
+# Namespace: validator (same as Canton participant)
+# Connects to participant.validator.svc.cluster.local:5001 via in-cluster DNS
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-otc-api
+  namespace: validator
+  labels:
+    app: canton-otc-api
+    component: api-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-otc-api
+  template:
+    metadata:
+      labels:
+        app: canton-otc-api
+        component: api-server
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: canton-node-65-108-15-30
+      containers:
+        - name: canton-otc-api
+          image: canton-otc-api:devnet
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Canton Ledger API — in-cluster DNS
+            - name: CANTON_LEDGER_HOST
+              value: "participant.validator.svc.cluster.local"
+            - name: CANTON_LEDGER_PORT
+              value: "5001"
+            # Application identity
+            - name: CANTON_APPLICATION_ID
+              value: "canton-otc-platform"
+            - name: CANTON_LEDGER_ID
+              value: "canton-otc"
+            # OTC operator party
+            - name: CANTON_PARTY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-api-secrets
+                  key: operator-party-id
+            # OTC trader party (co-signatory for all commands)
+            - name: CANTON_TRADER_PARTY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-api-secrets
+                  key: trader-party-id
+                  optional: true
+            # DevNet synchronizer
+            - name: CANTON_SYNCHRONIZER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-api-secrets
+                  key: synchronizer-id
+            # DAR package ID (canton-otc v2.0.0)
+            - name: OTC_PACKAGE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-api-secrets
+                  key: package-id
+            # JWT for Ledger API auth (HMAC-256, secret="unsafe")
+            - name: CANTON_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-api-secrets
+                  key: auth-token
+            # Server port
+            - name: PORT
+              value: "8080"
+            # Logging
+            - name: RUST_LOG
+              value: "canton_otc_api=info,tower_http=info"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      restartPolicy: Always

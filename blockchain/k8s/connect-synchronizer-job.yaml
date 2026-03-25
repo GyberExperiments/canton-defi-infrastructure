@@ -1,0 +1,226 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: connect-synchronizer
+  namespace: validator
+  labels:
+    app: canton-synchronizer-setup
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: canton-synchronizer-setup
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: canton-console
+          image: ghcr.io/digital-asset/decentralized-canton-sync/docker/canton-participant:0.5.7
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - |
+              set -e
+
+              echo "=========================================="
+              echo " Canton Synchronizer Connection Setup"
+              echo "=========================================="
+              echo ""
+              echo "Participant: participant.validator.svc.cluster.local:5002"
+              echo "Network: DevNet Global Synchronizer"
+              echo ""
+
+              # Create Canton console configuration
+              cat > /tmp/remote-participant.conf << 'EOF'
+              canton {
+                parameters {
+                  manual-start = no
+                }
+                remote-participants {
+                  participant {
+                    ledger-api {
+                      address = "participant.validator.svc.cluster.local"
+                      port = 5001
+                    }
+                    admin-api {
+                      address = "participant.validator.svc.cluster.local"
+                      port = 5002
+                    }
+                  }
+                }
+              }
+              EOF
+
+              # Create synchronizer connection script
+              cat > /tmp/connect-synchronizer.canton << 'EOF'
+              // Connect to DevNet Global Synchronizer
+              val synchronizerAlias = "global"
+              val sequencerUrl = "https://sequencer-1.sv-1.dev.global.canton.network.sync.global"
+
+              println("=" * 70)
+              println("  Connecting to Canton Network DevNet Global Synchronizer")
+              println("=" * 70)
+              println()
+              println(s"Synchronizer Alias: $synchronizerAlias")
+              println(s"Sequencer URL: $sequencerUrl")
+              println()
+
+              // Check current status
+              println("Current registered synchronizers:")
+              val registered = participant.domains.list_registered()
+              registered.foreach { d =>
+                println(s"  - ${d.config.domain}")
+              }
+
+              println()
+              println("Current connected synchronizers:")
+              val connected = participant.domains.list_connected()
+              if (connected.isEmpty) {
+                println("  (none)")
+              } else {
+                connected.foreach { d =>
+                  println(s"  - ${d.domainAlias} (${d.domainId})")
+                }
+              }
+              println()
+
+              // Check if already registered
+              val alreadyRegistered = registered.exists(_.config.domain == synchronizerAlias)
+              val alreadyConnected = connected.exists(_.domainAlias == synchronizerAlias)
+
+              if (alreadyConnected) {
+                println(s"✓ Already connected to '$synchronizerAlias'")
+                println()
+                println("=" * 70)
+                println("  SUCCESS: Synchronizer already connected")
+                println("=" * 70)
+              } else if (alreadyRegistered) {
+                println(s"ℹ  Synchronizer '$synchronizerAlias' is registered but not connected")
+                println("   Attempting to reconnect...")
+                println()
+
+                try {
+                  participant.domains.reconnect(synchronizerAlias)
+                  println("✓ Reconnect command issued")
+
+                  // Wait for connection
+                  Thread.sleep(15000)
+
+                  val nowConnected = participant.domains.list_connected()
+                  if (nowConnected.exists(_.domainAlias == synchronizerAlias)) {
+                    println()
+                    println("=" * 70)
+                    println("  SUCCESS: Reconnected to Global Synchronizer")
+                    println("=" * 70)
+                  } else {
+                    println()
+                    println("⚠  Reconnect initiated but connection not yet established")
+                    println("   Check participant logs for details")
+                    System.exit(1)
+                  }
+                } catch {
+                  case e: Exception =>
+                    println(s"✗ Reconnect failed: ${e.getMessage}")
+                    System.exit(1)
+                }
+              } else {
+                println(s"⚙  Registering and connecting to '$synchronizerAlias'...")
+                println()
+
+                try {
+                  // Use domains.connect() which both registers and connects
+                  participant.domains.connect(synchronizerAlias, Seq(sequencerUrl))
+                  println("✓ Connect command issued")
+
+                  // Wait for connection to establish
+                  println("   Waiting for connection...")
+                  Thread.sleep(20000)
+
+                  val nowConnected = participant.domains.list_connected()
+                  if (nowConnected.exists(_.domainAlias == synchronizerAlias)) {
+                    println()
+                    println("=" * 70)
+                    println("  SUCCESS: Connected to Canton Network DevNet")
+                    println("=" * 70)
+                    println()
+                    println("Connection Details:")
+                    nowConnected.filter(_.domainAlias == synchronizerAlias).foreach { d =>
+                      println(s"  Alias: ${d.domainAlias}")
+                      println(s"  Domain ID: ${d.domainId}")
+                    }
+                    println()
+                    println("Next Steps:")
+                    println("  1. Allocate parties via PartyManagementService")
+                    println("  2. Deploy DAML packages")
+                    println("  3. Create contracts via Ledger API")
+                    println()
+                  } else {
+                    println()
+                    println("⚠  Connect initiated but connection not yet established")
+                    println("   This may take additional time. Check participant logs:")
+                    println("   kubectl -n validator logs participant-xxx | grep -i synchronizer")
+                    println()
+
+                    // Show what's registered at least
+                    val nowRegistered = participant.domains.list_registered()
+                    if (nowRegistered.exists(_.config.domain == synchronizerAlias)) {
+                      println(s"✓ Synchronizer '$synchronizerAlias' successfully registered")
+                      println("   Connection is in progress...")
+                    }
+
+                    System.exit(1)
+                  }
+                } catch {
+                  case e: Exception =>
+                    println()
+                    println(s"✗ Connection failed: ${e.getMessage}")
+                    println()
+                    println("Troubleshooting:")
+                    println("  1. Check network connectivity to sequencer")
+                    println("  2. Verify participant logs for details")
+                    println("  3. Ensure egress IP 65.108.15.30 is whitelisted")
+                    println()
+                    System.exit(1)
+                }
+              }
+              EOF
+
+              echo "Starting Canton console..."
+              echo ""
+
+              # Run Canton console with remote participant configuration
+              /app/bin/canton daemon \
+                --config /tmp/remote-participant.conf \
+                --bootstrap /tmp/connect-synchronizer.canton \
+                --no-tty &
+
+              # Wait for Canton to start
+              sleep 10
+
+              # Wait for bootstrap script to complete
+              # The script will exit the JVM on completion
+              wait
+
+              exit_code=$?
+
+              echo ""
+              echo "=========================================="
+              if [ $exit_code -eq 0 ]; then
+                echo " ✓ Synchronizer connection completed"
+              else
+                echo " ✗ Synchronizer connection failed"
+              fi
+              echo "=========================================="
+
+              exit $exit_code
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseG1GC -XX:MaxRAMPercentage=50 -Xmx2g"
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "3Gi"
+              cpu: "1000m"

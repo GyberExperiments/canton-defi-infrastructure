@@ -1,0 +1,82 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ip-validation-checker
+  namespace: default
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: canton-node-65-108-15-30
+      containers:
+      - name: validator
+        image: ubuntu:latest
+        command: ["/bin/bash"]
+        args:
+          - -c
+          - |
+            apt-get update -qq && apt-get install -y -qq curl jq grpcurl ca-certificates 2>&1 | tail -5
+            
+            echo "╔════════════════════════════════════════════════════════════════╗"
+            echo "║   Проверка валидации IP-адреса 65.108.15.30 (Devnet)          ║"
+            echo "╚════════════════════════════════════════════════════════════════╝"
+            echo ""
+            
+            # Проверка текущего IP
+            echo "1️⃣  Текущий IP-адрес ноды:"
+            CURRENT_IP=$(curl -sSL http://checkip.amazonaws.com 2>/dev/null) || CURRENT_IP="unknown"
+            echo "   IP: $CURRENT_IP"
+            echo ""
+            
+            # Тест №1: Scan URL
+            echo "2️⃣  Тест №1: Проверка Scan URL"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Получение списка Scan URL..."
+            
+            scan_urls=$(curl -fsS -m 5 --connect-timeout 5 https://scan.sv-1.dev.global.canton.network.sync.global/api/scan/v0/scans 2>/dev/null | jq -r '.scans[].scans[].publicUrl' 2>/dev/null) || true
+            
+            if [ -z "$scan_urls" ]; then
+                echo "❌ Не удалось получить список Scan URL"
+            else
+                echo "Результаты:"
+                for url in $scan_urls; do
+                    version=$(curl -fsS -m 5 --connect-timeout 5 "$url/api/scan/version" 2>/dev/null | jq -r '.version' 2>/dev/null) || version=""
+                    if [ -n "$version" ] && [ "$version" != "null" ]; then
+                        echo "  ✓ $url: $version"
+                    else
+                        echo "  ✗ $url: TIMEOUT/ERROR"
+                    fi
+                done
+            fi
+            echo ""
+            
+            # Тест №2: Sequencer
+            echo "3️⃣  Тест №2: Проверка Sequencer"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Получение списка Sequencer URL..."
+            
+            sequencer_urls=$(curl -fsS -m 5 --connect-timeout 5 https://scan.sv-1.dev.global.canton.network.sync.global/api/scan/v0/dso-sequencers 2>/dev/null | jq -r '.domainSequencers[].sequencers[].url | sub("https://"; "")' 2>/dev/null) || true
+            
+            if [ -z "$sequencer_urls" ]; then
+                echo "❌ Не удалось получить список Sequencer URL"
+            else
+                echo "Результаты:"
+                for url in $sequencer_urls; do
+                    status=$(grpcurl --max-time 10 "$url":443 grpc.health.v1.Health/Check 2>&1 | grep -i "SERVING" || echo "") || true
+                    if [ -n "$status" ]; then
+                        echo "  ✓ $url: SERVING"
+                    else
+                        echo "  ✗ $url: NOT SERVING"
+                    fi
+                done
+            fi
+            
+            echo ""
+            echo "╔════════════════════════════════════════════════════════════════╗"
+            echo "║                        РЕЗУЛЬТАТЫ                              ║"
+            echo "╚════════════════════════════════════════════════════════════════╝"
+            echo ""
+            echo "Проверка завершена"

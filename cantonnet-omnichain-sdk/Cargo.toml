@@ -1,0 +1,132 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bridge-core",
+    "crates/canton-core",
+    "crates/canton-ledger-api",
+    "crates/canton-crypto",
+    "crates/canton-wallet",
+    "crates/canton-observability",
+    "crates/canton-reliability",
+    "crates/canton-transport",
+    "crates/bsc-client",
+    "crates/bridge-orchestrator",
+    "crates/bridge-db",
+    "crates/bridge-api",
+    "crates/canton-otc-api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "Apache-2.0"
+authors = ["Bridge Team"]
+repository = "https://github.com/org/canton-bsc-bridge"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.37", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["rt", "codec"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-opentelemetry = "0.23"
+opentelemetry = { version = "0.22", features = ["trace", "metrics"] }
+opentelemetry-otlp = "0.15"
+
+# gRPC (Canton Ledger API v2)
+tonic = { version = "0.11", features = ["tls", "tls-roots"] }
+prost = "0.12"
+prost-types = "0.12"
+tonic-build = "0.11"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+axum = { version = "0.7", features = ["ws", "macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = { version = "0.4", features = ["timeout", "limit", "load-shed"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "auth", "compression-gzip", "request-id"] }
+
+# Ethereum / BSC
+ethers = { version = "2.0", features = ["ws", "rustls", "abigen"] }
+ethers-contract = "2.0"
+ethers-signers = { version = "2.0", features = ["aws"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate", "json"] }
+deadpool-redis = "0.15"
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+
+# Config & Secrets
+config = "0.14"
+dotenvy = "0.15"
+
+# Crypto
+sha2 = "0.10"
+sha3 = "0.10"
+hex = "0.4"
+jsonwebtoken = "9.3"
+ring = "0.17"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.8", features = ["v4", "v7", "serde"] }
+
+# Metrics & Health
+prometheus-client = "0.22"
+
+# Rate limiting
+governor = "0.6"
+
+# Retry & Circuit breaker
+backon = "0.4"
+
+# Validation
+validator = { version = "0.18", features = ["derive"] }
+
+# Testing
+mockall = "0.12"
+wiremock = "0.6"
+testcontainers = "0.15"
+proptest = "1.4"
+tokio-test = "0.4"
+assert_matches = "1.5"
+
+# Internal crates
+bridge-core = { path = "crates/bridge-core" }
+canton-core = { path = "crates/canton-core" }
+canton-ledger-api = { path = "crates/canton-ledger-api" }
+canton-crypto = { path = "crates/canton-crypto" }
+canton-wallet = { path = "crates/canton-wallet" }
+canton-observability = { path = "crates/canton-observability" }
+canton-reliability = { path = "crates/canton-reliability" }
+canton-transport = { path = "crates/canton-transport" }
+bsc-client = { path = "crates/bsc-client" }
+bridge-orchestrator = { path = "crates/bridge-orchestrator" }
+bridge-db = { path = "crates/bridge-db" }
+bridge-api = { path = "crates/bridge-api" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true

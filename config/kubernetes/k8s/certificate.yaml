@@ -1,0 +1,43 @@
+# Certificate для 1OTC
+# Текущая версия: только 1otc.cc (DNS для cantonotc.com и canton-otc.com не настроен)
+# После исправления DNS раскомментировать дополнительные домены
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: canton-otc-tls-single
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    component: tls
+    environment: production
+spec:
+  secretName: canton-otc-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  dnsNames:
+  - 1otc.cc
+  # Раскомментировать когда DNS будет указывать на 31.129.105.180:
+  # - cantonotc.com
+  # - canton-otc.com
+
+---
+# Полная версия Certificate (для использования после исправления DNS)
+# apiVersion: cert-manager.io/v1
+# kind: Certificate
+# metadata:
+#   name: canton-otc-tls
+#   namespace: canton-otc
+#   labels:
+#     app: canton-otc
+#     component: tls
+#     environment: production
+# spec:
+#   secretName: canton-otc-tls
+#   issuerRef:
+#     kind: ClusterIssuer
+#     name: letsencrypt-prod
+#   dnsNames:
+#   - 1otc.cc
+#   - cantonotc.com
+#   - canton-otc.com

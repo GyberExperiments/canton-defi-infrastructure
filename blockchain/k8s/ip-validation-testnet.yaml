@@ -1,0 +1,115 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ip-validation-checker-testnet
+  namespace: default
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 0
+  template:
+    spec:
+      hostNetwork: true
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: canton-node-65-108-15-30
+      containers:
+      - name: validator
+        image: curlimages/curl:latest
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            echo "╔════════════════════════════════════════════════════════════════╗"
+            echo "║   Проверка валидации IP-адреса 65.108.15.20 (Testnet)         ║"
+            echo "╚════════════════════════════════════════════════════════════════╝"
+            echo ""
+            
+            # Проверка текущего IP
+            echo "1️⃣  Текущий IP-адрес ноды:"
+            # Используем привязку к конкретному IP через --interface
+            CURRENT_IP=$(curl -sSL --interface 65.108.15.20 http://checkip.amazonaws.com 2>/dev/null || curl -sSL http://checkip.amazonaws.com 2>/dev/null || echo "unknown")
+            echo "   IP: $CURRENT_IP"
+            echo ""
+            
+            # Проверяем доступность IP адреса на интерфейсе
+            if ip addr show | grep -q "65.108.15.20"; then
+              echo "✅ IP адрес 65.108.15.20 найден на интерфейсе"
+            else
+              echo "⚠️  IP адрес 65.108.15.20 не найден на интерфейсе"
+            fi
+            
+            if [ "$CURRENT_IP" = "65.108.15.20" ]; then
+              echo "✅ Правильный IP для Testnet"
+            else
+              echo "⚠️  IP не совпадает! IP: $CURRENT_IP [ожидается 65.108.15.20]"
+              echo "   Примечание: curl может использовать основной IP, но трафик будет маршрутизирован правильно"
+            fi
+            echo ""
+            
+            # Тест №1: Scan URL
+            echo "2️⃣  Тест №1: Проверка Scan URL"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Попытка подключения к https://scan.sv-1.testnet.global.canton.network.sync.global"
+            echo ""
+            
+            # Используем привязку к IP 65.108.15.20 для исходящих соединений
+            response=$(curl -fsS -m 10 --connect-timeout 5 --interface 65.108.15.20 https://scan.sv-1.testnet.global.canton.network.sync.global/api/scan/v0/scans 2>&1 || curl -fsS -m 10 --connect-timeout 5 https://scan.sv-1.testnet.global.canton.network.sync.global/api/scan/v0/scans 2>&1)
+            
+            if echo "$response" | grep -q '"scans"'; then
+                echo "✅ Успешное подключение к Scan API"
+                echo "Получение версий для каждого Scan URL..."
+                echo "$response" | grep -o 'https://[^"]*' | while read url; do
+                    version=$(curl -fsS -m 5 --connect-timeout 5 "$url/api/scan/version" 2>/dev/null | grep -o '"version":"[^"]*' | cut -d'"' -f4)
+                    if [ -n "$version" ]; then
+                        echo "  ✓ $url: $version"
+                    else
+                        echo "  ✗ $url: TIMEOUT/ERROR"
+                    fi
+                done
+            else
+                echo "❌ Не удалось подключиться к Scan API"
+                echo "Ответ: $response"
+            fi
+            echo ""
+            
+            # Тест №2: Sequencer endpoints
+            echo "3️⃣  Тест №2: Проверка Sequencer URL"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Попытка подключения к sequencer API..."
+            echo ""
+            
+            # Используем привязку к IP 65.108.15.20 для исходящих соединений
+            sequencer_response=$(curl -fsS -m 10 --connect-timeout 5 --interface 65.108.15.20 https://scan.sv-1.testnet.global.canton.network.sync.global/api/scan/v0/dso-sequencers 2>&1 || curl -fsS -m 10 --connect-timeout 5 https://scan.sv-1.testnet.global.canton.network.sync.global/api/scan/v0/dso-sequencers 2>&1)
+            
+            if echo "$sequencer_response" | grep -q '"sequencers"'; then
+                echo "✅ Успешное подключение к Sequencer API"
+                echo "Найдены Sequencer endpoints: "
+                echo "$sequencer_response" | grep -o '"url":"https://[^"]*' | cut -d'"' -f4 | while read url; do
+                    echo "  • $url"
+                done
+            else
+                echo "❌ Не удалось подключиться к Sequencer API"
+                echo "Ответ: $sequencer_response"
+            fi
+            
+            echo ""
+            echo "╔════════════════════════════════════════════════════════════════╗"
+            echo "║                        ИТОГИ ПРОВЕРКИ                          ║"
+            echo "╚════════════════════════════════════════════════════════════════╝"
+            echo ""
+            echo "Дополнительная информация:"
+            echo "  • Нода: canton-node-65-108-15-20 (Testnet)"
+            echo "  • Static IP: 65.108.15.20"
+            echo "  • Network: Testnet"
+            echo ""
+            echo "Статус:"
+            if [ "$CURRENT_IP" = "65.108.15.20" ]; then
+                echo "  ✅ IP-адрес подтвержден"
+            else
+                echo "  ⚠️  IP-адрес не совпадает"
+            fi
+            echo ""
+            echo "Рекомендация:"
+            echo "  Если оба теста прошли успешно, IP-адрес валидирован"
+            echo "  Если есть ошибки подключения, ожидайте 2-7 дней"
+            echo "  пока Super Validators обновят allowlist"

@@ -1,0 +1,101 @@
+# ArgoCD Application для GitOps управления Canton OTC Exchange
+# Автоматически синхронизирует конфигурацию из Git репозитория
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: canton-otc-minimal-stage
+  namespace: argocd
+  labels:
+    app: canton-otc
+    environment: minimal-stage
+    managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: "CreateNamespace=true"
+    argocd.argoproj.io/sync-options: "PrunePropagationPolicy=foreground"
+    argocd.argoproj.io/sync-options: "PruneLast=true"
+spec:
+  # Проект ArgoCD
+  project: default
+  
+  # Источник конфигурации (Git репозиторий)
+  source:
+    repoURL: https://github.com/TheMacroeconomicDao/CantonOTC
+    targetRevision: minimal-stage
+    path: config/kubernetes/k8s/minimal-stage
+    
+    # Helm chart (если используется)
+    helm:
+      valueFiles:
+      - values.yaml
+      parameters:
+      - name: environment
+        value: minimal-stage
+      - name: namespace
+        value: canton-otc-minimal-stage
+  
+  # Целевой кластер
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: canton-otc-minimal-stage
+  
+  # Политика синхронизации
+  syncPolicy:
+    # Автоматическая синхронизация
+    automated:
+      prune: true      # Удалять ресурсы, которых нет в Git
+      selfHeal: true   # Автоматически исправлять дрифт
+      allowEmpty: false # Не разрешать пустые приложения
+    
+    # Опции синхронизации
+    syncOptions:
+    - CreateNamespace=true          # Создавать namespace автоматически
+    - PrunePropagationPolicy=foreground # Удалять ресурсы в foreground
+    - PruneLast=true               # Удалять в последнюю очередь
+    - RespectIgnoreDifferences=true # Учитывать ignore различия
+    
+    # Ретрай при ошибках
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  # Игнорировать различия в определенных полях
+  ignoreDifferences:
+  - group: apps
+    kind: Deployment
+    jsonPointers:
+    - /spec/replicas
+    - /spec/template/spec/containers/0/image
+    - /metadata/annotations
+    - /metadata/labels
+    - /status
+  
+  # Информация о приложении
+  info:
+  - name: "Environment"
+    value: "minimal-stage"
+  - name: "Namespace"
+    value: "canton-otc-minimal-stage"
+  - name: "Repository"
+    value: "https://github.com/TheMacroeconomicDao/CantonOTC"
+  - name: "Branch"
+    value: "minimal-stage"
+  - name: "Managed By"
+    value: "ArgoCD"
+  
+  # Метаданные для мониторинга
+  metadata:
+    annotations:
+      argocd.argoproj.io/sync-wave: "1"
+      argocd.argoproj.io/sync-options: "CreateNamespace=true"
+      argocd.argoproj.io/sync-options: "PrunePropagationPolicy=foreground"
+      argocd.argoproj.io/sync-options: "PruneLast=true"
+    labels:
+      app: canton-otc
+      environment: minimal-stage
+      managed-by: argocd
+      sync-wave: "1"

@@ -1,0 +1,479 @@
+# ============================================================================
+# HORIZONTAL POD AUTOSCALER (HPA) & POD DISRUPTION BUDGETS (PDB)
+# ============================================================================
+# Автоматическое масштабирование и обеспечение availability
+# ============================================================================
+
+---
+# ============================================================================
+# HORIZONTAL POD AUTOSCALERS
+# ============================================================================
+
+# HPA для Canton OTC Production
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: canton-otc-hpa
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    environment: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: canton-otc
+  minReplicas: 2
+  maxReplicas: 10
+  
+  metrics:
+  # CPU-based scaling
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  
+  # Memory-based scaling
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  
+  # Custom metrics (если настроен Prometheus Adapter)
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "1000"
+  
+  behavior:
+    # Поведение при scale down
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Ждём 5 минут перед уменьшением
+      policies:
+      - type: Percent
+        value: 50  # Не уменьшать больше чем на 50% за раз
+        periodSeconds: 60
+      - type: Pods
+        value: 2  # Не уменьшать больше чем на 2 пода за раз
+        periodSeconds: 60
+      selectPolicy: Min
+    
+    # Поведение при scale up
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Увеличиваем сразу
+      policies:
+      - type: Percent
+        value: 100  # Можно удвоить количество подов
+        periodSeconds: 30
+      - type: Pods
+        value: 4  # Или добавить до 4 подов за раз
+        periodSeconds: 30
+      selectPolicy: Max
+
+---
+# HPA для Canton OTC Stage
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: canton-otc-stage-hpa
+  namespace: canton-otc-stage
+  labels:
+    app: canton-otc
+    environment: stage
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: canton-otc
+  minReplicas: 1
+  maxReplicas: 5
+  
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85
+
+---
+# HPA для Canton OTC Minimal Stage
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: canton-otc-minimal-hpa
+  namespace: canton-otc-minimal-stage
+  labels:
+    app: canton-otc
+    environment: minimal-stage
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: canton-otc
+  minReplicas: 1
+  maxReplicas: 3
+  
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85
+
+---
+# ============================================================================
+# POD DISRUPTION BUDGETS
+# ============================================================================
+
+# PDB для Canton OTC Production
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: canton-otc-pdb
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    environment: production
+spec:
+  minAvailable: 1  # Всегда должен быть доступен минимум 1 pod
+  selector:
+    matchLabels:
+      app: canton-otc
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
+---
+# PDB для Redis Production
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: canton-otc
+  labels:
+    app: redis
+    environment: production
+spec:
+  minAvailable: 2  # Минимум 2 из 3 Redis pods должны быть доступны
+  selector:
+    matchLabels:
+      app: redis
+
+---
+# PDB для Canton OTC Stage
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: canton-otc-stage-pdb
+  namespace: canton-otc-stage
+  labels:
+    app: canton-otc
+    environment: stage
+spec:
+  maxUnavailable: 1  # Максимум 1 pod может быть недоступен
+  selector:
+    matchLabels:
+      app: canton-otc
+
+---
+# PDB для Minimal Stage
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: canton-otc-minimal-pdb
+  namespace: canton-otc-minimal-stage
+  labels:
+    app: canton-otc
+    environment: minimal-stage
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: canton-otc
+
+---
+# PDB для Prometheus
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prometheus-pdb
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  maxUnavailable: 0  # Prometheus всегда должен быть доступен
+  selector:
+    matchLabels:
+      app: prometheus
+
+---
+# PDB для Grafana
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: grafana-pdb
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: grafana
+
+---
+# PDB для Loki
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: loki-pdb
+  namespace: monitoring
+  labels:
+    app: loki
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: loki
+
+---
+# ============================================================================
+# VERTICAL POD AUTOSCALER (VPA) - Optional
+# ============================================================================
+# Требует установки VPA operator в кластере
+
+# VPA для Canton OTC - автоматическая оптимизация resource requests
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: canton-otc-vpa
+  namespace: canton-otc
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: canton-otc
+  
+  updatePolicy:
+    updateMode: "Auto"  # Auto, Initial, Recreate, Off
+  
+  resourcePolicy:
+    containerPolicies:
+    - containerName: canton-otc
+      minAllowed:
+        cpu: 100m
+        memory: 256Mi
+      maxAllowed:
+        cpu: 2000m
+        memory: 4Gi
+      controlledResources:
+      - cpu
+      - memory
+
+---
+# VPA для Redis
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: redis-vpa
+  namespace: canton-otc
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: redis
+  
+  updatePolicy:
+    updateMode: "Initial"  # Применять только при создании новых pods
+  
+  resourcePolicy:
+    containerPolicies:
+    - containerName: redis
+      minAllowed:
+        cpu: 100m
+        memory: 256Mi
+      maxAllowed:
+        cpu: 1000m
+        memory: 1Gi
+
+---
+# ============================================================================
+# CLUSTER AUTOSCALER CONFIGURATION
+# ============================================================================
+# ConfigMap для Cluster Autoscaler (если используется)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-autoscaler-config
+  namespace: kube-system
+data:
+  autoscaler.conf: |
+    # Cluster Autoscaler Configuration
+    scale-down-enabled: true
+    scale-down-delay-after-add: 10m
+    scale-down-delay-after-delete: 10s
+    scale-down-delay-after-failure: 3m
+    scale-down-unneeded-time: 10m
+    scale-down-utilization-threshold: 0.5
+    skip-nodes-with-local-storage: false
+    skip-nodes-with-system-pods: true
+    max-node-provision-time: 15m
+    max-graceful-termination-sec: 600
+    max-total-unready-percentage: 45
+    ok-total-unready-count: 3
+    balance-similar-node-groups: true
+    expander: least-waste
+
+---
+# ============================================================================
+# RESOURCE QUOTAS для namespaces
+# ============================================================================
+
+# Resource Quota для Production
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: canton-otc-quota
+  namespace: canton-otc
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    
+    # Storage
+    persistentvolumeclaims: "20"
+    requests.storage: 500Gi
+    
+    # Objects
+    pods: "100"
+    services: "50"
+    configmaps: "100"
+    secrets: "100"
+    
+    # LoadBalancers
+    services.loadbalancers: "5"
+
+---
+# Resource Quota для Stage
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: canton-otc-stage-quota
+  namespace: canton-otc-stage
+spec:
+  hard:
+    requests.cpu: "10"
+    requests.memory: 20Gi
+    limits.cpu: "20"
+    limits.memory: 40Gi
+    persistentvolumeclaims: "10"
+    requests.storage: 200Gi
+    pods: "50"
+
+---
+# Resource Quota для Minimal Stage
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: canton-otc-minimal-quota
+  namespace: canton-otc-minimal-stage
+spec:
+  hard:
+    requests.cpu: "5"
+    requests.memory: 10Gi
+    limits.cpu: "10"
+    limits.memory: 20Gi
+    persistentvolumeclaims: "5"
+    requests.storage: 100Gi
+    pods: "20"
+
+---
+# ============================================================================
+# LIMIT RANGES для контроля дефолтных значений
+# ============================================================================
+
+# LimitRange для Production
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: canton-otc-limits
+  namespace: canton-otc
+spec:
+  limits:
+  # Для контейнеров
+  - type: Container
+    max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: 50m
+      memory: 64Mi
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 256Mi
+  
+  # Для подов
+  - type: Pod
+    max:
+      cpu: "8"
+      memory: 16Gi
+    min:
+      cpu: 100m
+      memory: 128Mi
+  
+  # Для PersistentVolumeClaims
+  - type: PersistentVolumeClaim
+    max:
+      storage: 200Gi
+    min:
+      storage: 1Gi
+
+---
+# LimitRange для Monitoring
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: monitoring-limits
+  namespace: monitoring
+spec:
+  limits:
+  - type: Container
+    max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: 50m
+      memory: 64Mi
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 256Mi
+

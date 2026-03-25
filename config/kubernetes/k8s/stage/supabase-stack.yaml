@@ -1,0 +1,486 @@
+---
+# 🚀 Self-Hosted Supabase Stack for Canton OTC Stage
+# Based on: https://github.com/supabase/supabase/tree/master/docker
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: supabase-stage
+---
+# PostgreSQL Database
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: supabase-db-pvc
+  namespace: supabase-stage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: supabase-config
+  namespace: supabase-stage
+data:
+  POSTGRES_DB: "postgres"
+  POSTGRES_HOST: "supabase-db"
+  POSTGRES_PORT: "5432"
+  JWT_SECRET: "super-secret-jwt-token-with-at-least-32-characters-long"
+  ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvY2FsIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NDUxOTIwMDAsImV4cCI6MTk2MDc2ODAwMH0.M9jrxyvPLkUxdKwPs0s1qlD32L88TkKO2t-CG7MZCFY"
+  SERVICE_ROLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvY2FsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY0NTE5MjAwMCwiZXhwIjoxOTYwNzY4MDAwfQ.M9jrxyvPLkUxdKwPs0s1qlD32L88TkKO2t-CG7MZCFY"
+  SITE_URL: "https://stage.build.infra.1otc.cc"
+  API_EXTERNAL_URL: "https://supabase-stage.build.infra.1otc.cc"
+  STUDIO_PORT: "3000"
+  GOTRUE_SITE_URL: "https://stage.build.infra.1otc.cc"
+  GOTRUE_JWT_SECRET: "super-secret-jwt-token-with-at-least-32-characters-long"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: supabase-db-secret
+  namespace: supabase-stage
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "SuperSecretPassword123!"
+  POSTGRES_USER: "postgres"
+---
+# PostgreSQL Database Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-db
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-db
+  template:
+    metadata:
+      labels:
+        app: supabase-db
+    spec:
+      containers:
+      - name: postgres
+        image: supabase/postgres:15.1.0.117
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: supabase-db-secret
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: supabase-db-secret
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: POSTGRES_PORT
+        volumeMounts:
+        - name: db-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: db-storage
+        persistentVolumeClaim:
+          claimName: supabase-db-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-db
+  namespace: supabase-stage
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: supabase-db
+---
+# Kong API Gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-kong
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-kong
+  template:
+    metadata:
+      labels:
+        app: supabase-kong
+    spec:
+      containers:
+      - name: kong
+        image: kong:2.8.1
+        ports:
+        - containerPort: 8000
+        - containerPort: 8443
+        env:
+        - name: KONG_DATABASE
+          value: "off"
+        - name: KONG_DECLARATIVE_CONFIG
+          value: "/var/lib/kong/kong.yml"
+        - name: KONG_DNS_ORDER
+          value: "LAST,A,CNAME"
+        - name: KONG_PLUGINS
+          value: "request-transformer,cors,key-auth,acl"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-kong
+  namespace: supabase-stage
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+  - name: https
+    port: 8443
+    targetPort: 8443
+  selector:
+    app: supabase-kong
+---
+# PostgREST API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-rest
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-rest
+  template:
+    metadata:
+      labels:
+        app: supabase-rest
+    spec:
+      containers:
+      - name: postgrest
+        image: postgrest/postgrest:v11.2.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: PGRST_DB_URI
+          value: "postgresql://postgres:SuperSecretPassword123!@supabase-db:5432/postgres"
+        - name: PGRST_DB_SCHEMAS
+          value: "public,storage"
+        - name: PGRST_DB_ANON_ROLE
+          value: "anon"
+        - name: PGRST_JWT_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: JWT_SECRET
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-rest
+  namespace: supabase-stage
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+  selector:
+    app: supabase-rest
+---
+# GoTrue Auth Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-auth
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-auth
+  template:
+    metadata:
+      labels:
+        app: supabase-auth
+    spec:
+      containers:
+      - name: gotrue
+        image: supabase/gotrue:v2.99.0
+        ports:
+        - containerPort: 9999
+        env:
+        - name: GOTRUE_DB_DRIVER
+          value: "postgres"
+        - name: GOTRUE_DB_DATABASE_URL
+          value: "postgresql://postgres:SuperSecretPassword123!@supabase-db:5432/postgres?search_path=auth"
+        - name: GOTRUE_SITE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: GOTRUE_SITE_URL
+        - name: GOTRUE_JWT_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: GOTRUE_JWT_SECRET
+        - name: GOTRUE_DISABLE_SIGNUP
+          value: "false"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-auth
+  namespace: supabase-stage
+spec:
+  ports:
+  - port: 9999
+    targetPort: 9999
+  selector:
+    app: supabase-auth
+---
+# Realtime Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-realtime
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-realtime
+  template:
+    metadata:
+      labels:
+        app: supabase-realtime
+    spec:
+      containers:
+      - name: realtime
+        image: supabase/realtime:v2.25.35
+        ports:
+        - containerPort: 4000
+        env:
+        - name: DB_HOST
+          value: "supabase-db"
+        - name: DB_NAME
+          value: "postgres"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "SuperSecretPassword123!"
+        - name: DB_PORT
+          value: "5432"
+        - name: PORT
+          value: "4000"
+        - name: JWT_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: JWT_SECRET
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-realtime
+  namespace: supabase-stage
+spec:
+  ports:
+  - port: 4000
+    targetPort: 4000
+  selector:
+    app: supabase-realtime
+---
+# Supabase Studio (Admin UI)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-studio
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-studio
+  template:
+    metadata:
+      labels:
+        app: supabase-studio
+    spec:
+      containers:
+      - name: studio
+        image: supabase/studio:20231123-64a766a
+        ports:
+        - containerPort: 3000
+        env:
+        - name: SUPABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: API_EXTERNAL_URL
+        - name: STUDIO_PG_META_URL
+          value: "http://supabase-meta:8080"
+        - name: SUPABASE_ANON_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: ANON_KEY
+        - name: SUPABASE_SERVICE_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: supabase-config
+              key: SERVICE_ROLE_KEY
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-studio
+  namespace: supabase-stage
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 3000
+    targetPort: 3000
+  selector:
+    app: supabase-studio
+---
+# Meta Service (для Studio)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supabase-meta
+  namespace: supabase-stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supabase-meta
+  template:
+    metadata:
+      labels:
+        app: supabase-meta
+    spec:
+      containers:
+      - name: meta
+        image: supabase/postgres-meta:v0.68.0
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PG_META_PORT
+          value: "8080"
+        - name: PG_META_DB_HOST
+          value: "supabase-db"
+        - name: PG_META_DB_NAME
+          value: "postgres"
+        - name: PG_META_DB_USER
+          value: "postgres"
+        - name: PG_META_DB_PASSWORD
+          value: "SuperSecretPassword123!"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supabase-meta
+  namespace: supabase-stage
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+  selector:
+    app: supabase-meta
+---
+# Ingress для Supabase Studio
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: supabase-studio-ingress
+  namespace: supabase-stage
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: supabase.stage.build.infra.1otc.cc
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: supabase-studio
+            port:
+              number: 3000
+  tls:
+  - hosts:
+    - supabase.stage.build.infra.1otc.cc
+    secretName: supabase-studio-tls
+
+
+

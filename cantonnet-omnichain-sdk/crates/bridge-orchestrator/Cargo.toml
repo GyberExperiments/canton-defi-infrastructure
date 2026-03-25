@@ -1,0 +1,22 @@
+[package]
+name = "bridge-orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Main service: Canton↔BSC flows, recovery, health, metrics"
+
+[[bin]]
+name = "bridge-orchestrator"
+path = "src/main.rs"
+
+[dependencies]
+bridge-core = { path = "../bridge-core" }
+bridge-db = { path = "../bridge-db" }
+bsc-client = { path = "../bsc-client" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+chrono = { workspace = true }
+tower = { workspace = true }
+prometheus-client = { workspace = true }

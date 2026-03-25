@@ -1,0 +1,64 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canton-validator-ingress
+  namespace: default
+  labels:
+    app: canton-validator
+    component: nginx
+  annotations:
+    # Traefik entrypoint (web = HTTP порт 80)
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    # Опционально: приоритет маршрута (если есть конфликты)
+    traefik.ingress.kubernetes.io/router.priority: "10"
+spec:
+  ingressClassName: traefik
+  rules:
+  # Без host - работает для всех хостов (включая прямой доступ по IP)
+  - http:
+      paths:
+      # Wallet Web UI
+      - path: /wallet
+        pathType: Prefix
+        backend:
+          service:
+            name: canton-validator-nginx
+            port:
+              number: 80
+      # ANS Web UI
+      - path: /ans
+        pathType: Prefix
+        backend:
+          service:
+            name: canton-validator-nginx
+            port:
+              number: 80
+      # Health check
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: canton-validator-nginx
+            port:
+              number: 80
+      # Validator API
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: canton-validator-nginx
+            port:
+              number: 80
+      # Root - редирект на /wallet
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: canton-validator-nginx
+            port:
+              number: 80
+
+
+
+
+

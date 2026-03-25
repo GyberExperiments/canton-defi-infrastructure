@@ -1,0 +1,13 @@
+sdk-version: 3.3.0-snapshot.20250603.0
+name: canton-otc
+version: 2.0.0
+source: .
+parties:
+  - Operator
+  - Trader1
+  - Trader2
+  - Auditor
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script

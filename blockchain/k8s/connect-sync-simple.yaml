@@ -1,0 +1,98 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: connect-sync
+  namespace: validator
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: grpc-connect
+        image: alpine:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "======================================================================"
+            echo " Canton Synchronizer Connection via gRPC"
+            echo "======================================================================"
+            echo ""
+
+            # Install grpcurl
+            apk add --no-cache grpcurl jq
+
+            PARTICIPANT="participant.validator.svc.cluster.local:5002"
+            ALIAS="global"
+            SEQ_URL="https://sequencer-1.sv-1.dev.global.canton.network.sync.global"
+
+            echo "Checking current connections..."
+            grpcurl -plaintext -d '{}' $PARTICIPANT \
+              com.digitalasset.canton.admin.participant.v30.SynchronizerConnectivityService.ListConnectedSynchronizers
+
+            echo ""
+            echo "Attempting to connect to synchronizer..."
+            echo "Alias: $ALIAS"
+            echo "Sequencer: $SEQ_URL"
+            echo ""
+
+            # Create connect request - trying with minimal required fields
+            grpcurl -plaintext -d "{
+              \"config\": {
+                \"synchronizer_alias\": \"$ALIAS\",
+                \"sequencer_connections\": {
+                  \"sequencer_connections\": [{
+                    \"grpc\": {
+                      \"connections\": [\"$SEQ_URL\"],
+                      \"transport_security\": true
+                    }
+                  }],
+                  \"sequencer_trust_threshold\": 1,
+                  \"submission_request_amplification\": {
+                    \"factor\": 1,
+                    \"patience\": \"0s\"
+                  },
+                  \"sequencer_liveness_margin\": 0,
+                  \"sequencer_connection_pool_delays\": {
+                    \"min_restart_delay\": \"1s\",
+                    \"max_restart_delay\": \"30s\",
+                    \"subscription_request_delay\": \"0s\",
+                    \"warn_validation_delay\": \"10s\"
+                  }
+                },
+                \"manual_connect\": false,
+                \"time_tracker\": {}
+              }
+            }" $PARTICIPANT \
+              com.digitalasset.canton.admin.participant.v30.SynchronizerConnectivityService.ConnectSynchronizer
+
+            RESULT=$?
+
+            if [ $RESULT -eq 0 ]; then
+              echo ""
+              echo "✓ Connect command executed successfully"
+              echo "Waiting 20s for connection to establish..."
+              sleep 20
+
+              echo ""
+              echo "Final check:"
+              grpcurl -plaintext -d '{}' $PARTICIPANT \
+                com.digitalasset.canton.admin.participant.v30.SynchronizerConnectivityService.ListConnectedSynchronizers
+
+              echo ""
+              echo "======================================================================"
+              echo " Job completed - check output above for connection status"
+              echo "======================================================================"
+            else
+              echo ""
+              echo "✗ Connect command failed with exit code $RESULT"
+              exit 1
+            fi
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

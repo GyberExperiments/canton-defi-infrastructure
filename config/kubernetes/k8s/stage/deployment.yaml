@@ -1,0 +1,249 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-otc
+  namespace: canton-otc-stage
+  labels:
+    app: canton-otc
+    environment: stage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-otc
+  template:
+    metadata:
+      labels:
+        app: canton-otc
+        environment: stage
+    spec:
+      imagePullSecrets:
+      - name: ghcr-secret-stage
+      containers:
+      - name: canton-otc
+        image: ghcr.io/themacroeconomicdao/cantonotc:stage
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: NEXT_PUBLIC_APP_URL
+          value: "https://stage.build.infra.1otc.cc"
+        - name: HD_WALLET_SEED
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: HD_WALLET_SEED
+        - name: TRON_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: TRON_API_KEY
+        - name: REDIS_URL
+          value: "redis://redis:6379"
+        - name: ADMIN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: ADMIN_API_KEY
+        - name: GOOGLE_SHEET_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: GOOGLE_SHEET_ID
+        - name: GOOGLE_SERVICE_ACCOUNT_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        - name: GOOGLE_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: GOOGLE_PRIVATE_KEY
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: TELEGRAM_BOT_TOKEN
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: TELEGRAM_CHAT_ID
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_HOST
+        - name: SMTP_PORT
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_PORT
+        - name: SMTP_SECURE
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_SECURE
+        - name: SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_USER
+              optional: true
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_PASSWORD
+              optional: true
+        - name: SMTP_FROM_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_FROM_ADDRESS
+        - name: SMTP_FROM_NAME
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SMTP_FROM_NAME
+        - name: USDT_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: USDT_RECEIVING_ADDRESS
+              optional: true
+        - name: CANTON_COIN_PRICE_USD
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: CANTON_COIN_PRICE_USD
+        - name: NEXTAUTH_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: NEXTAUTH_SECRET
+        - name: NEXTAUTH_URL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: NEXTAUTH_URL
+        - name: NEXT_PUBLIC_INTERCOM_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: NEXT_PUBLIC_INTERCOM_APP_ID
+        - name: INTERCOM_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: INTERCOM_ACCESS_TOKEN
+        - name: INTERCOM_ADMIN_ID
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: INTERCOM_ADMIN_ID
+        - name: CANTON_COIN_BUY_PRICE_USD
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: CANTON_COIN_BUY_PRICE_USD
+        - name: CANTON_COIN_SELL_PRICE_USD
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: CANTON_COIN_SELL_PRICE_USD
+        - name: MIN_USDT_AMOUNT
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: MIN_USDT_AMOUNT
+        - name: MAX_USDT_AMOUNT
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: MAX_USDT_AMOUNT
+        - name: ETH_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: ETH_RECEIVING_ADDRESS
+        - name: TRON_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: TRON_RECEIVING_ADDRESS
+        - name: SOLANA_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SOLANA_RECEIVING_ADDRESS
+        - name: OPTIMISM_RECEIVING_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: OPTIMISM_RECEIVING_ADDRESS
+        - name: SUPPORT_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: SUPPORT_EMAIL
+        - name: TELEGRAM_BOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: TELEGRAM_BOT_USERNAME
+        - name: BUSINESS_HOURS
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: BUSINESS_HOURS
+        - name: GOOGLE_SHEETS_RANGE
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: GOOGLE_SHEETS_RANGE
+        - name: ADMIN_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: ADMIN_EMAIL
+        - name: ADMIN_PASSWORD_HASH
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: ADMIN_PASSWORD_HASH
+        - name: ADMIN_NAME
+          valueFrom:
+            secretKeyRef:
+              name: canton-otc-secrets-stage
+              key: ADMIN_NAME
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5

@@ -1,0 +1,31 @@
+# DevNet overrides for splice-validator (merge with bundle's standalone-validator-values.yaml)
+# Node: canton-node-65-108-15-30 (IP 65.108.15.30)
+# Updated for splice-validator 0.5.14 (scanClient + synchronizer BFT config)
+
+migration:
+  id: "1"
+
+persistence:
+  databaseName: validator_1
+
+svSponsorAddress: "https://sv.sv-1.dev.global.canton.network.lcv.mpch.io"
+validatorPartyHint: "gyber-validator-1"
+# Must match participant's actual node identity (set at first init 38 days ago)
+nodeIdentifier: "YOUR_VALIDATOR_NODE_NAME"
+
+# Run without OIDC for DevNet (optional: enable auth later)
+disableAuth: true
+
+# trust-single scan client — uses only sv-1 scan (BFT requires reaching ALL scans,
+# which fails because SNAT doesn't cover all AWS ALB IPs; switch to BFT later)
+scanClient:
+  scanType: "trust-single"
+  scanAddress: "https://scan.sv-1.dev.global.canton.network.sync.global"
+
+# Use BFT synchronizer — participant already has 14 sequencer connections working
+synchronizer:
+  connectionType: "bft"
+
+# Pin to node with static egress IP 65.108.15.30
+nodeSelector:
+  kubernetes.io/hostname: canton-node-65-108-15-30

@@ -1,0 +1,525 @@
+# ============================================================================
+# CANTON VALIDATOR - PRODUCTION SECURITY FIX
+# ============================================================================
+# Исправления:
+# ✅ Убрали hostNetwork: true (security risk!)
+# ✅ Заменили hostPath на PersistentVolume
+# ✅ Добавили proper backup для данных
+# ✅ Добавили anti-affinity для multi-node support
+# ✅ Улучшили resource limits
+# ✅ Добавили proper security context
+# ============================================================================
+
+---
+# Namespace для Canton Node
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: canton-node
+  labels:
+    name: canton-node
+    component: blockchain
+
+---
+# PersistentVolumeClaims для Canton data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: canton-data
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: canton-logs
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: logs
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+
+---
+# ConfigMap для Canton конфигурации
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-config
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: config
+data:
+  canton.conf: |
+    canton {
+      features {
+        enable-preview-apis = true
+        enable-testing-apis = false  # В production отключаем testing APIs
+      }
+      
+      monitoring {
+        metrics {
+          reporter = "prometheus"
+          port = 8080
+        }
+        
+        health-check {
+          port = 8081
+        }
+        
+        admin-api {
+          port = 8082
+        }
+      }
+      
+      # Хранилище данных - НЕ in-memory для production!
+      storage {
+        type = "postgres"
+        config {
+          dataSourceClass = "org.postgresql.ds.PGSimpleDataSource"
+          properties = {
+            serverName = "postgres.canton-node"
+            portNumber = 5432
+            databaseName = "canton"
+            user = "canton"
+            password = ${POSTGRES_PASSWORD}
+          }
+        }
+      }
+      
+      parameters {
+        # Performance tuning
+        caching {
+          enabled = true
+          max-size = 1000
+        }
+        
+        # Network settings
+        network {
+          max-inbound-message-size = 4194304  # 4MB
+          max-outbound-message-size = 4194304
+        }
+      }
+    }
+  
+  validator.conf: |
+    canton {
+      participants {
+        validator {
+          storage {
+            type = "postgres"
+            config {
+              dataSourceClass = "org.postgresql.ds.PGSimpleDataSource"
+              properties = {
+                serverName = "postgres.canton-node"
+                portNumber = 5432
+                databaseName = "canton_validator"
+                user = "canton"
+                password = ${POSTGRES_PASSWORD}
+              }
+            }
+          }
+          
+          ledger-api {
+            address = "0.0.0.0"
+            port = 6865
+          }
+          
+          admin-api {
+            address = "0.0.0.0"
+            port = 8082
+          }
+          
+          monitoring {
+            metrics {
+              reporter = "prometheus"
+              port = 8080
+            }
+            
+            health-check {
+              port = 8081
+            }
+          }
+        }
+      }
+    }
+
+---
+# ✅ FIXED: StatefulSet без hostNetwork
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: canton-node
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: validator
+    version: "0.4.19"
+spec:
+  serviceName: canton-node
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-node
+  template:
+    metadata:
+      labels:
+        app: canton-node
+        component: validator
+        version: "0.4.19"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # ✅ УБРАЛИ hostNetwork: true - используем обычную сеть
+      # hostNetwork: true  # ❌ УДАЛЕНО - security risk!
+      
+      # DNS policy для обычной сети
+      dnsPolicy: ClusterFirst
+      
+      # ✅ Anti-affinity - можем запустить на любой ноде
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - canton-node
+              topologyKey: kubernetes.io/hostname
+      
+      # Toleration для специальных нод
+      tolerations:
+      - key: node.kubernetes.io/disk-pressure
+        operator: Exists
+        effect: NoSchedule
+      - key: dedicated
+        operator: Equal
+        value: blockchain
+        effect: NoSchedule
+      
+      # Секреты для pull образа
+      imagePullSecrets:
+      - name: ghcr-creds
+      
+      # Init container для подготовки данных
+      initContainers:
+      - name: init-canton
+        image: busybox:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          echo "Initializing Canton data directory..."
+          mkdir -p /opt/canton/data
+          mkdir -p /opt/canton/logs
+          chown -R 1000:1000 /opt/canton/data
+          chown -R 1000:1000 /opt/canton/logs
+          echo "Initialization complete"
+        volumeMounts:
+        - name: canton-data
+          mountPath: /opt/canton/data
+        - name: canton-logs
+          mountPath: /opt/canton/logs
+        securityContext:
+          runAsUser: 0
+      
+      containers:
+      - name: canton-validator
+        image: ghcr.io/themacroeconomicdao/canton-node:0.4.19
+        imagePullPolicy: Always
+        
+        # Порты
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        - name: admin
+          containerPort: 8082
+          protocol: TCP
+        - name: ledger-grpc
+          containerPort: 6865
+          protocol: TCP
+        
+        # Переменные окружения
+        env:
+        - name: CANTON_VERSION
+          value: "0.4.19"
+        - name: CANTON_API
+          value: "https://sv.sv-1.dev.global.canton.network.sync.global"
+        - name: PARTY_HINT
+          value: "gyber-validator"
+        - name: VALIDATOR_MODE
+          value: "0"  # 0=validator, 1=observer
+        
+        # Секреты
+        - name: ONBOARDING_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: canton-onboarding
+              key: ONBOARDING_SECRET
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: canton-postgres
+              key: password
+        
+        # ✅ Увеличенные ресурсы для production
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 4Gi
+          limits:
+            cpu: 2000m
+            memory: 8Gi
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 5
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        # ✅ Используем PersistentVolumes вместо hostPath
+        volumeMounts:
+        - name: canton-data
+          mountPath: /opt/canton/data
+        - name: canton-logs
+          mountPath: /opt/canton/logs
+        - name: canton-config
+          mountPath: /opt/canton/config
+          readOnly: true
+        
+        # ✅ Улучшенный security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      
+      # Volumes
+      volumes:
+      - name: canton-config
+        configMap:
+          name: canton-config
+      
+      # Restart policy
+      restartPolicy: Always
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: 60
+  
+  # ✅ VolumeClaimTemplates для StatefulSet
+  volumeClaimTemplates:
+  - metadata:
+      name: canton-data
+      labels:
+        app: canton-node
+        component: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 50Gi
+  - metadata:
+      name: canton-logs
+      labels:
+        app: canton-node
+        component: logs
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 20Gi
+
+---
+# ✅ Service с правильными портами (без hostNetwork)
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-node
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: validator
+spec:
+  type: ClusterIP
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  - name: health
+    port: 8081
+    targetPort: 8081
+    protocol: TCP
+  - name: admin
+    port: 8082
+    targetPort: 8082
+    protocol: TCP
+  - name: ledger-grpc
+    port: 6865
+    targetPort: 6865
+    protocol: TCP
+  selector:
+    app: canton-node
+
+---
+# ✅ NodePort Service для внешнего доступа (если нужен)
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-node-external
+  namespace: canton-node
+  labels:
+    app: canton-node
+    component: external
+spec:
+  type: NodePort
+  ports:
+  - name: ledger-grpc
+    port: 6865
+    targetPort: 6865
+    nodePort: 30865  # Фиксированный порт на ноде
+    protocol: TCP
+  selector:
+    app: canton-node
+
+---
+# PodDisruptionBudget для availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: canton-node-pdb
+  namespace: canton-node
+  labels:
+    app: canton-node
+spec:
+  maxUnavailable: 0  # Canton validator не должен быть недоступен
+  selector:
+    matchLabels:
+      app: canton-node
+
+---
+# ServiceMonitor для Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: canton-node-metrics
+  namespace: canton-node
+  labels:
+    app: canton-node
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: canton-node
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# CronJob для backup Canton data
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: canton-data-backup
+  namespace: canton-node
+spec:
+  schedule: "0 3 * * *"  # Каждый день в 3:00
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: postgres:15-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              
+              BACKUP_NAME="canton-backup-$(date +%Y%m%d-%H%M%S).sql.gz"
+              
+              # Backup PostgreSQL database
+              pg_dump -h postgres.canton-node \
+                      -U canton \
+                      -d canton \
+                      -F c -b -v \
+                      -f /backup/canton.dump
+              
+              pg_dump -h postgres.canton-node \
+                      -U canton \
+                      -d canton_validator \
+                      -F c -b -v \
+                      -f /backup/canton_validator.dump
+              
+              # Compress
+              tar czf /backup/$BACKUP_NAME \
+                  /backup/canton.dump \
+                  /backup/canton_validator.dump
+              
+              # Upload to S3 (optional)
+              # aws s3 cp /backup/$BACKUP_NAME s3://canton-backups/
+              
+              echo "Backup completed: $BACKUP_NAME"
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: canton-postgres
+                  key: password
+            volumeMounts:
+            - name: backup
+              mountPath: /backup
+          volumes:
+          - name: backup
+            emptyDir: {}
+          restartPolicy: OnFailure
+

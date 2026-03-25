@@ -1,0 +1,75 @@
+-- Treasury.TreasuryBillHolding (05_DAML_CONTRACTS_SPEC §3.2)
+module Treasury.TreasuryBillHolding where
+
+import Common.Types
+import Common.Compliance
+import Treasury.YieldDistribution
+
+template TreasuryBillHolding
+  with
+    tokenId: Text
+    holder: Party
+    custodian: Party
+    amount: Decimal
+    purchasePrice: Decimal
+    purchaseDate: Date
+    compliance: ComplianceRecord
+  where
+    signatory custodian
+    observer holder
+
+    ensure amount > 0.0
+
+    -- Transfer holding (consuming: archive self, optionally create reduced holding)
+    consuming choice TransferHolding : ContractId TreasuryBillHolding
+      with
+        newHolder: Party
+        newCompliance: ComplianceRecord
+        transferAmount: Decimal
+      controller holder
+      do
+        assertMsg "Invalid transfer amount" $
+          transferAmount > 0.0 && transferAmount <= amount
+
+        newHolding <- create TreasuryBillHolding with
+          tokenId
+          holder = newHolder
+          custodian
+          amount = transferAmount
+          purchasePrice
+          purchaseDate
+          compliance = newCompliance
+
+        if transferAmount == amount
+          then return newHolding
+          else do
+            _ <- create this with amount = amount - transferAmount
+            return newHolding
+
+    -- Partial redemption: create RedemptionRequest, optionally reduce or archive holding
+    consuming choice PartialRedeem : (Optional (ContractId TreasuryBillHolding), ContractId RedemptionRequest)
+      with
+        redeemAmount: Decimal
+      controller holder
+      do
+        assertMsg "Invalid redeem amount" $
+          redeemAmount > 0.0 && redeemAmount <= amount
+
+        request <- create RedemptionRequest with
+          tokenId
+          requester = holder
+          amount = redeemAmount
+          status = PENDING
+
+        if redeemAmount == amount
+          then return (None, request)
+          else do
+            updated <- create TreasuryBillHolding with
+              tokenId
+              holder
+              custodian
+              amount = amount - redeemAmount
+              purchasePrice
+              purchaseDate
+              compliance
+            return (Some updated, request)

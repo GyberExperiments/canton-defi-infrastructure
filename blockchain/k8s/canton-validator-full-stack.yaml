@@ -1,0 +1,527 @@
+# ==============================================================================
+# Canton Validator Full Stack - Kubernetes Deployment
+# ==============================================================================
+# Основано на compose.yaml из образа ghcr.io/themacroeconomicdao/canton-node:0.5.8
+# Конвертировано для нативного Kubernetes deployment без Docker-in-Docker
+# ==============================================================================
+
+---
+# ConfigMap для переменных окружения
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-validator-env
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: config
+data:
+  # Network Configuration
+  CANTON_NETWORK: "devnet"
+  SPONSOR_SV_ADDRESS: "https://sv.sv-1.dev.global.canton.network.sync.global"
+  SCAN_ADDRESS: "https://scan.sv-1.dev.global.canton.network.sync.global"
+  
+  # Database Configuration
+  SPLICE_DB_SERVER: "postgres-splice"
+  SPLICE_DB_PORT: "5432"
+  SPLICE_DB_USER: "canton"
+  SPLICE_DB_PASSWORD: "canton_secure_password_change_me"
+  
+  # Migration Configuration
+  MIGRATION_ID: "0"
+  
+  # Validator Configuration
+  PARTY_HINT: "gyber-validator"
+  PARTICIPANT_IDENTIFIER: "gyber-validator"
+  VALIDATOR_MODE: "0"
+  
+  # Image Configuration
+  IMAGE_REPO: "ghcr.io/themacroeconomicdao/"
+  IMAGE_TAG: "0.5.8"
+  SPLICE_POSTGRES_VERSION: "14"
+  NGINX_VERSION: "latest"
+  
+  # Auth Configuration (optional - disable for now)
+  AUTH_JWKS_URL: ""
+  AUTH_WELLKNOWN_URL: ""
+  LEDGER_API_AUTH_AUDIENCE: ""
+  VALIDATOR_AUTH_AUDIENCE: ""
+  LEDGER_API_ADMIN_USER: "admin"
+  WALLET_ADMIN_USER: "admin"
+
+---
+# PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-splice
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: database
+spec:
+  serviceName: postgres-splice
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-validator
+      component: database
+  template:
+    metadata:
+      labels:
+        app: canton-validator
+        component: database
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:14
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_PASSWORD
+        - name: POSTGRES_DB
+          value: "postgres"
+        - name: CREATE_DATABASE_participant
+          value: "participant-0"
+        - name: CREATE_DATABASE_validator
+          value: "validator"
+        ports:
+        - containerPort: 5432
+          name: postgres
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - canton
+            - -d
+            - postgres
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - canton
+            - -d
+            - postgres
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 20Gi
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-splice
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: database
+spec:
+  selector:
+    app: canton-validator
+    component: database
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  clusterIP: None
+
+---
+# Canton Participant Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-participant
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: participant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-validator
+      component: participant
+  template:
+    metadata:
+      labels:
+        app: canton-validator
+        component: participant
+    spec:
+      imagePullSecrets:
+      - name: ghcr-creds
+      initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.37.0
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z postgres-splice 5432; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
+      containers:
+      - name: participant
+        image: ghcr.io/digital-asset/decentralized-canton-sync/docker/canton-participant:0.5.8
+        env:
+        - name: CANTON_PARTICIPANT_POSTGRES_SERVER
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_SERVER
+        - name: CANTON_PARTICIPANT_POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_PORT
+        - name: CANTON_PARTICIPANT_POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_USER
+        - name: CANTON_PARTICIPANT_POSTGRES_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_PASSWORD
+        - name: CANTON_PARTICIPANT_POSTGRES_DB
+          value: "participant-0"
+        - name: CANTON_PARTICIPANT_POSTGRES_SCHEMA
+          value: "participant"
+        - name: CANTON_PARTICIPANT_ADMIN_USER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: LEDGER_API_ADMIN_USER
+        # Auth Configuration for Participant
+        # Using SPLICE_APP_PARTICIPANT_AUTH_AUDIENCE instead of AUTH_TARGET_AUDIENCE
+        - name: SPLICE_APP_PARTICIPANT_AUTH_AUDIENCE
+          value: "authenticated"
+        - name: AUTH_TARGET_AUDIENCE
+          value: "authenticated"
+        - name: AUTH_URL
+          value: "http://65.108.15.30:32233"
+        - name: AUTH_JWKS_URL
+          value: "http://65.108.15.30:32233/jwks"
+        - name: AUTH_WELLKNOWN_URL
+          value: "http://65.108.15.30:32233/.well-known/openid-configuration"
+        - name: SPLICE_APP_PARTICIPANT_AUTH_JWKS_URL
+          value: "http://65.108.15.30:32233/jwks"
+        ports:
+        - containerPort: 4001
+          name: ledger-api
+        - containerPort: 4002
+          name: admin-api
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "3Gi"
+            cpu: "1500m"
+        livenessProbe:
+          tcpSocket:
+            port: 4001
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          tcpSocket:
+            port: 4001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+---
+# Canton Participant Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: participant
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: participant
+spec:
+  selector:
+    app: canton-validator
+    component: participant
+  ports:
+  - port: 4001
+    targetPort: 4001
+    name: ledger-api
+  - port: 4002
+    targetPort: 4002
+    name: admin-api
+
+---
+# Validator App Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: validator-app
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: validator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-validator
+      component: validator
+  template:
+    metadata:
+      labels:
+        app: canton-validator
+        component: validator
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        kubernetes.io/hostname: canton-node-65-108-15-30
+      imagePullSecrets:
+      - name: ghcr-creds
+      initContainers:
+      - name: wait-for-participant
+        image: busybox:1.37.0
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z participant 4001; do
+            echo "Waiting for Canton Participant..."
+            sleep 2
+          done
+          echo "Canton Participant is ready!"
+      containers:
+      - name: validator
+        image: ghcr.io/digital-asset/decentralized-canton-sync/docker/validator-app:0.5.8
+        env:
+        # Participant Connection
+        - name: SPLICE_APP_VALIDATOR_PARTICIPANT_ADDRESS
+          value: "participant"
+        - name: SPLICE_APP_VALIDATOR_PARTICIPANT_IDENTIFIER
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: PARTICIPANT_IDENTIFIER
+        - name: SPLICE_APP_VALIDATOR_PARTY_HINT
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: PARTY_HINT
+        
+        # Sponsor SV Configuration
+        - name: SPLICE_APP_VALIDATOR_SV_SPONSOR_ADDRESS
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPONSOR_SV_ADDRESS
+        - name: SPLICE_APP_VALIDATOR_SCAN_ADDRESS
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SCAN_ADDRESS
+        
+        # Onboarding Secret
+        - name: SPLICE_APP_VALIDATOR_ONBOARDING_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: canton-onboarding
+              key: ONBOARDING_SECRET
+        
+        # Database Configuration
+        - name: SPLICE_DB_SERVER
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_SERVER
+        - name: SPLICE_DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_PORT
+        - name: SPLICE_DB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_USER
+        - name: SPLICE_DB_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: SPLICE_DB_PASSWORD
+        
+        # Migration Configuration
+        - name: MIGRATION_ID
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: MIGRATION_ID
+        
+        # Auth Configuration
+        - name: SPLICE_APP_VALIDATOR_LEDGER_API_AUTH_USER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: LEDGER_API_ADMIN_USER
+        - name: SPLICE_APP_VALIDATOR_WALLET_USER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: canton-validator-env
+              key: WALLET_ADMIN_USER
+        
+        # Additional Config via Environment
+        - name: ADDITIONAL_CONFIG_PERSISTENCE
+          value: |
+            canton.validator-apps.validator_backend.storage {
+              type = postgres
+              config {
+                dataSourceClass = "org.postgresql.ds.PGSimpleDataSource"
+                properties = {
+                  databaseName = validator
+                  currentSchema = validator
+                  serverName = postgres-splice
+                  portNumber = 5432
+                  user = canton
+                  password = canton_secure_password_change_me
+                  tcpKeepAlive = true
+                }
+              }
+            }
+        - name: ADDITIONAL_CONFIG_BFT_SCAN
+          value: |
+            canton.validator-apps.validator_backend.scan-client.type = "bft"
+            canton.validator-apps.validator_backend.scan-client.seed-urls = [ "https://scan.sv-1.dev.global.canton.network.sync.global" ]
+        - name: ADDITIONAL_CONFIG_MIGRATION_ID
+          value: |
+            canton.validator-apps.validator_backend {
+              domain-migration-id = 0
+            }
+        - name: ADDITIONAL_CONFIG_WALLET
+          value: |
+            canton.validator-apps.validator_backend {
+              enable-wallet = true
+              validator-wallet-users = [wallet-admin]
+              admin-api {
+                port = 5003
+                address = "0.0.0.0"
+              }
+            }
+        
+        ports:
+        - containerPort: 5003
+          name: validator-api
+        - containerPort: 5004
+          name: validator-admin
+        
+        volumeMounts:
+        - name: domain-upgrade-dump
+          mountPath: /domain-upgrade-dump
+        
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        
+        livenessProbe:
+          tcpSocket:
+            port: 5003
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 5
+        
+        readinessProbe:
+          tcpSocket:
+            port: 5003
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+      
+      volumes:
+      - name: domain-upgrade-dump
+        emptyDir: {}
+
+---
+# Validator Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: validator
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: validator
+spec:
+  type: NodePort
+  selector:
+    app: canton-validator
+    component: validator
+  ports:
+  - port: 5003
+    targetPort: 5003
+    nodePort: 30503
+    name: validator-api
+  - port: 5004
+    targetPort: 5004
+    nodePort: 30504
+    name: validator-admin
+
+---
+# Health Check Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-validator-health
+  namespace: canton-node
+  labels:
+    app: canton-validator
+    component: health
+spec:
+  type: LoadBalancer
+  externalIPs:
+  - 65.108.15.30
+  selector:
+    app: canton-validator
+    component: validator
+  ports:
+  - port: 8081
+    targetPort: 5003
+    name: health

@@ -1,0 +1,409 @@
+# ============================================================================
+# VELERO BACKUP SYSTEM - PRODUCTION DISASTER RECOVERY
+# ============================================================================
+# Автоматические backup всего кластера:
+# - Daily full backups
+# - Hourly incremental backups для критичных namespace
+# - 30 дней retention
+# - Backup в S3-совместимое хранилище
+# ============================================================================
+
+---
+# Namespace для Velero
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+  labels:
+    name: velero
+    component: backup
+
+---
+# ServiceAccount для Velero
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: velero
+  namespace: velero
+  labels:
+    app: velero
+
+---
+# Secret для S3 credentials
+# ВАЖНО: Замените на ваши реальные credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloud-credentials
+  namespace: velero
+type: Opaque
+stringData:
+  cloud: |
+    [default]
+    aws_access_key_id=YOUR_ACCESS_KEY_ID
+    aws_secret_access_key=YOUR_SECRET_ACCESS_KEY
+
+---
+# ConfigMap для Velero конфигурации
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velero-config
+  namespace: velero
+data:
+  # Restic для backup PersistentVolumes
+  restic-daemonset.yaml: |
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: restic
+      namespace: velero
+    spec:
+      selector:
+        matchLabels:
+          name: restic
+      template:
+        metadata:
+          labels:
+            name: restic
+        spec:
+          serviceAccountName: velero
+          securityContext:
+            runAsUser: 0
+          volumes:
+          - name: host-pods
+            hostPath:
+              path: /var/lib/kubelet/pods
+          - name: scratch
+            emptyDir: {}
+          containers:
+          - name: restic
+            image: velero/velero:v1.12.0
+            imagePullPolicy: IfNotPresent
+            command:
+            - /velero
+            args:
+            - restic
+            - server
+            volumeMounts:
+            - name: host-pods
+              mountPath: /host_pods
+              mountPropagation: HostToContainer
+            - name: scratch
+              mountPath: /scratch
+            env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: VELERO_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: VELERO_SCRATCH_DIR
+              value: /scratch
+
+---
+# Daily Full Backup Schedule
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-full-backup
+  namespace: velero
+  labels:
+    app: velero
+    schedule: daily
+spec:
+  # Каждый день в 2:00 UTC
+  schedule: "0 2 * * *"
+  template:
+    # Backup всех критичных namespace
+    includedNamespaces:
+    - canton-otc
+    - canton-otc-stage
+    - canton-otc-minimal-stage
+    - canton-node
+    - external-secrets-system
+    
+    # Включить cluster resources
+    includeClusterResources: true
+    
+    # Snapshot PersistentVolumes
+    snapshotVolumes: true
+    
+    # TTL - хранить 30 дней
+    ttl: 720h
+    
+    # Storage location
+    storageLocation: default
+    
+    # Volume snapshot locations
+    volumeSnapshotLocations:
+    - default
+    
+    # Hooks для pre/post backup
+    hooks:
+      resources:
+      - name: redis-backup-hook
+        includedNamespaces:
+        - canton-otc
+        labelSelector:
+          matchLabels:
+            app: redis
+        pre:
+        - exec:
+            command:
+            - /bin/sh
+            - -c
+            - redis-cli BGSAVE
+            onError: Continue
+            timeout: 3m
+
+---
+# Hourly Incremental Backup для критичных данных
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: hourly-critical-backup
+  namespace: velero
+  labels:
+    app: velero
+    schedule: hourly
+spec:
+  # Каждый час
+  schedule: "0 * * * *"
+  template:
+    # Только production namespace
+    includedNamespaces:
+    - canton-otc
+    - canton-node
+    
+    # Только критичные ресурсы
+    includedResources:
+    - persistentvolumeclaims
+    - persistentvolumes
+    - secrets
+    - configmaps
+    
+    # Label selector для критичных данных
+    labelSelector:
+      matchExpressions:
+      - key: backup
+        operator: In
+        values:
+        - critical
+        - required
+    
+    includeClusterResources: false
+    snapshotVolumes: true
+    ttl: 168h  # Хранить 7 дней
+
+---
+# Weekly Cluster-Wide Backup
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: weekly-cluster-backup
+  namespace: velero
+  labels:
+    app: velero
+    schedule: weekly
+spec:
+  # Каждое воскресенье в 3:00 UTC
+  schedule: "0 3 * * 0"
+  template:
+    # Backup ВСЕГО кластера
+    includedNamespaces:
+    - "*"
+    
+    includeClusterResources: true
+    snapshotVolumes: true
+    
+    # Хранить 3 месяца
+    ttl: 2160h
+    
+    storageLocation: default
+
+---
+# Backup Storage Location (S3)
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: aws
+  objectStorage:
+    bucket: canton-otc-k8s-backups
+    prefix: velero
+  config:
+    region: us-east-1
+    s3ForcePathStyle: "true"
+    # Для S3-совместимых хранилищ (MinIO, DigitalOcean Spaces, etc)
+    s3Url: https://s3.us-east-1.amazonaws.com
+  credential:
+    name: cloud-credentials
+    key: cloud
+
+---
+# Volume Snapshot Location
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: aws
+  config:
+    region: us-east-1
+
+---
+# CronJob для проверки backup статуса
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-health-check
+  namespace: velero
+spec:
+  schedule: "0 6 * * *"  # Каждый день в 6:00
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: velero
+          containers:
+          - name: backup-check
+            image: velero/velero:v1.12.0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Checking recent backups..."
+              
+              # Проверяем backups за последние 24 часа
+              RECENT_BACKUPS=$(velero backup get --output json | jq '[.items[] | select(.status.phase == "Completed")] | length')
+              
+              if [ "$RECENT_BACKUPS" -eq 0 ]; then
+                echo "ERROR: No successful backups in last 24 hours!"
+                exit 1
+              fi
+              
+              echo "SUCCESS: Found $RECENT_BACKUPS successful backups"
+              
+              # Отправляем уведомление (опционально)
+              # curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+              #   -d "chat_id=$TELEGRAM_CHAT_ID" \
+              #   -d "text=✅ Velero Backup Health Check: $RECENT_BACKUPS successful backups"
+            env:
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-secrets
+                  key: TELEGRAM_BOT_TOKEN
+                  optional: true
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: canton-otc-secrets
+                  key: TELEGRAM_CHAT_ID
+                  optional: true
+          restartPolicy: OnFailure
+
+---
+# Redis-specific backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-rdb-backup
+  namespace: canton-otc
+  labels:
+    app: redis
+    component: backup
+spec:
+  # Каждые 6 часов
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: default
+          containers:
+          - name: redis-backup
+            image: redis:7-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              
+              # Триггер BGSAVE на всех Redis instances
+              for i in 0 1 2; do
+                echo "Backing up redis-$i..."
+                redis-cli -h redis-$i.redis BGSAVE
+              done
+              
+              # Ждем завершения
+              sleep 30
+              
+              # Копируем RDB файлы (если настроен S3/volume)
+              BACKUP_NAME="redis-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+              
+              # Опционально: загрузка в S3
+              # tar czf /tmp/$BACKUP_NAME /data/*.rdb
+              # aws s3 cp /tmp/$BACKUP_NAME s3://canton-otc-redis-backups/
+              
+              echo "Backup completed: $BACKUP_NAME"
+            env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: access_key_id
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: secret_access_key
+                  optional: true
+          restartPolicy: OnFailure
+
+---
+# RBAC для Velero
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: velero
+  labels:
+    app: velero
+rules:
+- apiGroups:
+  - "*"
+  resources:
+  - "*"
+  verbs:
+  - "*"
+- nonResourceURLs:
+  - "*"
+  verbs:
+  - "*"
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: velero
+  labels:
+    app: velero
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: velero
+subjects:
+- kind: ServiceAccount
+  name: velero
+  namespace: velero
+

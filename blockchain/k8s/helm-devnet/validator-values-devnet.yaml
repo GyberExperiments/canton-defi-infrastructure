@@ -1,0 +1,21 @@
+# DevNet overrides for validator-values.yaml (0.5.14)
+
+# Обязательные spliceInstanceNames для чарта (из ui-config-values.yaml)
+spliceInstanceNames:
+  networkName: "Canton Network"
+  networkFaviconUrl: "https://www.canton.network/hubfs/cn-favicon-05%201-1.png"
+  amuletName: "Canton Coin"
+  amuletNameAcronym: "CC"
+  nameServiceName: "Canton Name Service"
+  nameServiceNameAcronym: "CNS"
+
+# k3s: standard-rwo нет, используем local-path
+pvc:
+  volumeStorageClass: local-path
+
+disableAuth: true
+
+contactPoint: "gyber-validator"
+
+nodeSelector:
+  kubernetes.io/hostname: canton-node-65-108-15-30

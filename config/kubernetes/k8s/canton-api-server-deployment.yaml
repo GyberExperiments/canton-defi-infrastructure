@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-api-server
+  namespace: canton-otc
+  labels:
+    app: canton-api-server
+    component: ledger-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: canton-api-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: canton-api-server
+        component: ledger-gateway
+    spec:
+      containers:
+        - name: canton-api-server
+          image: ghcr.io/themacroeconomicdao/canton-api-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: CANTON_LEDGER_HOST
+              value: "participant.validator.svc.cluster.local"
+            - name: CANTON_LEDGER_PORT
+              value: "5001"
+            - name: CANTON_APPLICATION_ID
+              value: "canton-otc-platform"
+            - name: CANTON_PARTY_ID
+              value: "otc_operator"
+            - name: CANTON_LEDGER_ID
+              value: "canton-otc"
+            - name: RUST_LOG
+              value: "canton_api_server=info,tower_http=info"
+            - name: PORT
+              value: "8080"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-api-server
+  namespace: canton-otc
+  labels:
+    app: canton-api-server
+spec:
+  selector:
+    app: canton-api-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: ClusterIP

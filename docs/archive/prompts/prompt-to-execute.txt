@@ -1,0 +1,53 @@
+Исправь проблему с переменными Supabase в deployment и протестируй полную функциональность системы принятия ордеров.
+
+ПРОБЛЕМА: Переменные NEXT_PUBLIC_SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY помечены как optional: true в deployment манифесте config/kubernetes/k8s/minimal-stage/deployment.yaml (строки 322 и 328), из-за чего они не подхватываются в поде.
+
+ВЫПОЛНИ:
+
+1. Исправь deployment манифест:
+   - Открой config/kubernetes/k8s/minimal-stage/deployment.yaml
+   - Найди секцию "Supabase Configuration" (строки 317-328)
+   - Убери строки "optional: true" для обеих переменных NEXT_PUBLIC_SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY
+   - Сохрани файл
+
+2. Проверь GitHub Secrets:
+   - Убедись что секреты NEXT_PUBLIC_SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY есть в GitHub Secrets
+   - Если их нет, получи из Kubernetes: kubectl get secret canton-otc-secrets-minimal-stage -n canton-otc -o jsonpath='{.data.NEXT_PUBLIC_SUPABASE_URL}' | base64 -d
+   - Добавь через: gh secret set NEXT_PUBLIC_SUPABASE_URL -b "$VALUE"
+
+3. Обнови секрет в Kubernetes:
+   - Получи секреты из GitHub: SUPABASE_URL=$(gh secret get NEXT_PUBLIC_SUPABASE_URL)
+   - Обнови секрет: kubectl patch secret canton-otc-secrets-minimal-stage -n canton-otc --type='json' -p="[{\"op\": \"replace\", \"path\": \"/data/NEXT_PUBLIC_SUPABASE_URL\", \"value\": \"$(echo -n "$SUPABASE_URL" | base64)\"}]"
+
+4. Примени обновленный deployment:
+   - kubectl apply -f config/kubernetes/k8s/minimal-stage/deployment.yaml
+   - kubectl rollout restart deployment/canton-otc -n canton-otc
+   - kubectl rollout status deployment/canton-otc -n canton-otc --timeout=120s
+
+5. Проверь переменные в поде:
+   - sleep 15
+   - kubectl exec -n canton-otc deployment/canton-otc -- env | grep -E "NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY"
+   - Должны быть видны обе переменные
+
+6. Протестируй сохранение в Supabase:
+   - Создай тестовую заявку: curl -X POST https://1otc.cc/api/create-order -H "Content-Type: application/json" -d '{"cantonAddress": "04286df6fb621ddf3949a799a53e2fdc::1220da95ae5ff1535f5ca2d0797c1cc1a57c76b72bb7a0a2bc5f880eb61ed34f7ba8", "usdtAmount": 500, "cantonAmount": 5560, "email": "test@example.com", "exchangeDirection": "buy"}'
+   - Проверь логи: kubectl logs -n canton-otc deployment/canton-otc --tail=500 | grep -iE "Order saved|public_orders"
+   - Проверь в Supabase через port-forward и REST API
+
+7. Протестируй кнопку "Принять заявку":
+   - Отправь callback query через webhook с data: "accept_order:ORDER_ID"
+   - Проверь логи обработки
+   - Проверь что статус обновился в Supabase на "accepted"
+
+8. Финальная проверка:
+   - Убедись что переменные работают
+   - Проверь последние заявки в Supabase
+   - Проверь логи на ошибки
+
+ОЖИДАЕМЫЙ РЕЗУЛЬТАТ:
+- ✅ Переменные Supabase видны в поде
+- ✅ Заявки сохраняются в Supabase
+- ✅ Кнопка "Принять заявку" работает и обновляет статус
+
+Выполни все шаги последовательно и предоставь результаты каждого этапа.
+

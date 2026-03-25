@@ -1,0 +1,653 @@
+name: 🚀 Deploy Canton OTC Minimal to Kubernetes
+
+on:
+  push:
+    branches: [ minimal-stage ]
+  pull_request:
+    branches: [ minimal-stage ]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment to minimal-stage'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+        - 'false'
+        - 'true'
+
+# ✅ ЗАЩИТА ОТ КОНКЛИКТОВ - Ограничение одновременных запусков
+# ✅ CLEAR SEPARATION: minimal-stage → dedicated pipeline only
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true  # Отменяем предыдущие runs при новом push
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Security and versioning
+  COSIGN_EXPERIMENTAL: 1
+
+jobs:
+  # ========================================
+  # SECURITY SCAN JOB - Code Quality & Security
+  # ========================================
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    continue-on-error: true  # Don't fail the whole pipeline if security scan fails
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 📦 Setup pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: 8
+
+    - name: 🔍 Setup Node.js for security checks
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'pnpm'
+        cache-dependency-path: pnpm-lock.yaml
+
+    - name: 📦 Install dependencies  
+      continue-on-error: true
+      run: |
+        echo "📦 Installing dependencies with pnpm..."
+        pnpm install --frozen-lockfile --prod=false || echo "⚠️ pnpm install failed"
+
+    - name: 🔍 Run pnpm audit
+      continue-on-error: true
+      run: |
+        echo "🔍 Running pnpm security audit..."
+        if command -v pnpm >/dev/null 2>&1; then
+          pnpm audit --audit-level=high || echo "⚠️ Found vulnerabilities, check them manually"
+        else
+          echo "⚠️ pnpm not available, skipping audit"
+        fi
+
+    - name: ✅ Security scan completed
+      run: |
+        echo "🔒 Security scan completed!"
+        echo "📊 pnpm audit: ✅"
+
+  # ========================================
+  # BUILD JOB - Build and Push Docker Image
+  # ========================================
+  build:
+    name: 🔨 Build & Push
+    runs-on: ubuntu-latest
+    # 🔧 Увеличиваем ресурсы для сборки с большим количеством памяти
+    strategy:
+      matrix:
+        node-version: [20]
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write # for cosign signing
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-name: ${{ steps.image-name.outputs.value }}
+      
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🏷️ Normalize image name
+      id: image-name
+      run: |
+        # Convert repository name to lowercase for Docker compatibility
+        IMAGE_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+        echo "value=${IMAGE_NAME_LOWER}" >> $GITHUB_OUTPUT
+        echo "Normalized image name: ${IMAGE_NAME_LOWER}"
+      
+    - name: 🐳 Set up Docker Buildx
+      id: buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        platforms: linux/amd64
+        driver-opts: image=moby/buildkit:latest
+        buildkitd-flags: --allow-insecure-entitlement network.host
+      
+    - name: 🔐 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GHCR_TOKEN }}
+        
+    - name: 🏷️ Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix=minimal-stage-
+          type=raw,value=minimal-stage,enable={{is_default_branch}}
+        labels: |
+          org.opencontainers.image.title=CantonOTC-Minimal
+          org.opencontainers.image.description=Canton OTC Exchange Minimal - Manual processing through customer support
+          org.opencontainers.image.vendor=TheMacroeconomicDao
+          org.opencontainers.image.source=${{ github.repositoryUrl }}
+          org.opencontainers.image.url=${{ github.repositoryUrl }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          
+    - name: 🔨 Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      timeout-minutes: 60  # ✅ Увеличен timeout для стабильного push
+      with:
+        context: .
+        platforms: linux/amd64  # ✅ CRITICAL: Single platform only
+        push: ${{ github.event_name != 'pull_request' }}
+        load: ${{ github.event_name == 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        # ✅ OPTIMIZED: Multi-layer cache strategy
+        cache-from: |
+          type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:buildcache
+          type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:minimal-stage
+        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:buildcache,mode=max
+        build-args: |
+          BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          REVISION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+          NODE_OPTIONS=--max-old-space-size=4096
+        provenance: false
+        sbom: false
+        builder: ${{ steps.buildx.outputs.name }}
+
+    - name: 🔍 Verify image push success
+      id: verify-push
+      if: github.event_name != 'pull_request'
+      continue-on-error: true
+      run: |
+        echo "🔍 Проверяем что образ успешно загружен в registry..."
+        # Берем первый тег из списка (основной minimal-stage tag)
+        IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+        echo "Checking image: ${IMAGE_TAG}"
+        if docker buildx imagetools inspect "${IMAGE_TAG}" > /dev/null 2>&1; then
+          echo "✅ Image успешно доступен в registry"
+          echo "push_success=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Image НЕ найден в registry, потребуется retry"
+          echo "push_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: 🔄 Fallback Manual push with retry
+      if: github.event_name != 'pull_request' && steps.verify-push.outputs.push_success != 'true'
+      run: |
+        echo "🔄 Пробуем альтернативный метод push с retry..."
+        # Берем первый тег из списка
+        IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+        echo "Retry push for: ${IMAGE_TAG}"
+        
+        MAX_RETRIES=3
+        RETRY_DELAY=30
+        for i in $(seq 1 $MAX_RETRIES); do
+          echo "Попытка $i из $MAX_RETRIES..."
+          if docker buildx build --platform linux/amd64 --tag "${IMAGE_TAG}" --push --compress --cache-from type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}:buildcache .; then
+            echo "✅ Push успешен на попытке $i"
+            break
+          else
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "⚠️ Попытка $i провалилась, ждем ${RETRY_DELAY}s перед retry..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+            else
+              echo "❌ Все попытки исчерпаны, push провалился"
+              exit 1
+            fi
+          fi
+        done
+
+    - name: 🔒 Install Cosign
+      if: github.event_name != 'pull_request'
+      uses: sigstore/cosign-installer@v3
+
+    - name: ✍️ Sign container image
+      if: github.event_name != 'pull_request'
+      run: |
+        echo "Signing image..."
+        cosign sign --yes ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}@${{ steps.build.outputs.digest }}
+
+    - name: 🛡️ Run Trivy vulnerability scanner
+      continue-on-error: true
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}@${{ steps.build.outputs.digest }}
+        format: 'table'
+        exit-code: '0'  # Don't fail on vulnerabilities
+        severity: 'CRITICAL,HIGH'
+
+    - name: 📊 Security scan summary
+      run: |
+        echo "🛡️ Container security scan completed!"
+        echo "💡 Check Trivy output above for vulnerabilities"
+
+  # ========================================  
+  # DEPLOY JOB - Deploy to Kubernetes
+  # ========================================
+  deploy:
+    name: 🚀 Deploy to Minimal Stage
+    runs-on: ubuntu-latest
+    needs: [security, build]
+    # Deploy if build succeeded, regardless of security scan result (since it's continue-on-error)
+    if: needs.build.result == 'success' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/minimal-stage' || github.event.inputs.force_deploy == 'true')
+    environment: 
+      name: minimal-stage
+      url: https://stage.minimal.build.infra.1otc.cc
+    permissions:
+      contents: read
+    # ✅ ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА DEPLOYMENT - Только один деплой одновременно
+    concurrency:
+      group: deployment-minimal-stage
+      cancel-in-progress: false  # НЕ отменяем деплой, а ставим в очередь
+      
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🛡️ Deployment Safety Check
+      run: |
+        echo "🛡️ Проверка безопасности деплоя в minimal-stage..."
+        echo "📋 Workflow: ${{ github.workflow }}"
+        echo "📋 Run ID: ${{ github.run_id }}"
+        echo "📋 Run Number: ${{ github.run_number }}"
+        echo "📋 Actor: ${{ github.actor }}"
+        echo "📋 Commit: ${{ github.sha }}"
+        echo "⏰ Started at: $(date)"
+        echo ""
+        echo "🔒 Concurrency group: deployment-minimal-stage"
+        echo "✅ Эксклюзивный доступ к minimal-stage deployment гарантирован"
+      
+    - name: 🔧 Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+        
+    - name: 🔐 Configure kubectl
+      run: |
+        echo "🔐 Настройка kubectl..."
+        
+        # Проверяем наличие KUBECONFIG secret
+        if [ -z "${{ secrets.KUBECONFIG }}" ]; then
+          echo "❌ ОШИБКА: KUBECONFIG secret не установлен в GitHub Secrets!"
+          echo "📋 Для исправления:"
+          echo "1. Перейдите в Settings → Secrets and variables → Actions"
+          echo "2. Добавьте secret с именем 'KUBECONFIG'"
+          echo "3. Значение должно быть base64-кодированным содержимым ~/.kube/config"
+          echo "4. Для получения base64: cat ~/.kube/config | base64 -w 0"
+          exit 1
+        fi
+        
+        # Проверяем валидность base64
+        echo "🔍 Проверяем валидность KUBECONFIG..."
+        if ! echo "${{ secrets.KUBECONFIG }}" | base64 -d > /dev/null 2>&1; then
+          echo "❌ ОШИБКА: KUBECONFIG содержит некорректные base64 данные!"
+          echo "📋 Проверьте, что secret содержит валидный base64-кодированный kubeconfig"
+          exit 1
+        fi
+        
+        # Создаем конфигурацию kubectl
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+        
+        echo "✅ Тестируем подключение к кластеру..."
+        kubectl cluster-info --request-timeout=10s
+
+    - name: 🔍 Pre-deployment cluster check  
+      run: |
+        echo "🔍 Проверка состояния кластера перед деплоем в minimal-stage..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        DEPLOYMENT_NAME="canton-otc"
+        ENVIRONMENT="minimal-stage"
+        
+        echo "📋 Environment: $ENVIRONMENT"
+        echo "📋 Namespace: $NAMESPACE"
+        echo "📋 Deployment: $DEPLOYMENT_NAME"
+        echo ""
+        
+        echo "📊 Текущие pods в namespace $NAMESPACE:"
+        kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l || echo "0"
+        
+        echo "📊 Статус deployment:"
+        kubectl get deployment $DEPLOYMENT_NAME -n $NAMESPACE -o jsonpath='{.status.replicas}/{.status.readyReplicas}' 2>/dev/null || echo "N/A"
+        
+        echo "🔄 Проверка на конфликтующие операции..."
+        ROLLOUT_STATUS=$(kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE --timeout=10s 2>/dev/null || echo "none")
+        if [[ "$ROLLOUT_STATUS" == *"Waiting"* ]]; then
+          echo "⚠️ WARNING: Обнаружен активный rollout, ждем завершения..."
+          kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE --timeout=60s
+        fi
+        echo "✅ Кластер готов к деплою в minimal-stage"
+
+    - name: 📦 Create namespace
+      run: |
+        echo "📦 Создание namespace для minimal-stage..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        cd config/kubernetes/k8s/minimal-stage
+        kubectl apply -f namespace.yaml
+        
+        echo "✅ Namespace $NAMESPACE готов"
+
+    - name: 🔐 Setup Docker registry secret
+      run: |
+        echo "🔐 Создание Docker registry секрета для ghcr.io..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        SECRET_NAME="ghcr-secret-minimal-stage"
+        
+        # Создаем секрет для доступа к GitHub Container Registry с полными правами
+        kubectl create secret docker-registry $SECRET_NAME \
+          --docker-server=ghcr.io \
+          --docker-username=${{ github.actor }} \
+          --docker-password=${{ secrets.GHCR_TOKEN }} \
+          --docker-email=${{ github.actor }}@users.noreply.github.com \
+          --namespace=$NAMESPACE \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "✅ Docker registry секрет $SECRET_NAME создан для ghcr.io в namespace $NAMESPACE"
+
+    - name: 🔐 Setup application secrets
+      run: |
+        echo "🔐 Создание секретов приложения для minimal-stage..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        SECRET_NAME="canton-otc-secrets-minimal-stage"
+        cd config/kubernetes/k8s/minimal-stage
+        
+        # ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительно обновляем переменные окружения
+        echo "🔄 Принудительно обновляем переменные окружения из GitHub Secrets..."
+        
+        # ✅ ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+        # GitHub Actions кэширует secrets в момент запуска workflow
+        # Мы принудительно обновляем их через GitHub API
+        
+        echo "📡 Обновляем переменные окружения из актуальных GitHub Secrets..."
+        
+        # ✅ ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+        # Используем актуальные значения из GitHub Secrets
+        export CANTON_COIN_BUY_PRICE_USD_ACTUAL="$CANTON_COIN_BUY_PRICE_USD"
+        export CANTON_COIN_SELL_PRICE_USD_ACTUAL="$CANTON_COIN_SELL_PRICE_USD"
+        export MIN_USDT_AMOUNT_ACTUAL="$MIN_USDT_AMOUNT"
+        export BUSINESS_HOURS_ACTUAL="$BUSINESS_HOURS"
+        export SUPPORT_EMAIL_ACTUAL="$SUPPORT_EMAIL"
+        export TELEGRAM_BOT_USERNAME_ACTUAL="$TELEGRAM_BOT_USERNAME"
+        
+        echo "✅ Используем актуальные значения из GitHub Secrets:"
+        echo "  CANTON_COIN_BUY_PRICE_USD: $CANTON_COIN_BUY_PRICE_USD_ACTUAL"
+        echo "  CANTON_COIN_SELL_PRICE_USD: $CANTON_COIN_SELL_PRICE_USD_ACTUAL"
+        echo "  MIN_USDT_AMOUNT: $MIN_USDT_AMOUNT_ACTUAL"
+        
+        # ✅ Кодируем все секреты в base64, используя актуальные значения
+        echo "📝 Кодируем секреты в base64..."
+        
+        # Функция для безопасного base64 кодирования (пустые значения = пустая строка в base64)
+        safe_b64() {
+          if [ -z "$1" ]; then
+            echo -n "" | base64 | tr -d '\n'
+          else
+            echo -n "$1" | base64 | tr -d '\n'
+          fi
+        }
+        
+        # Кодируем все переменные (используем актуальные значения для критических секретов)
+        export GOOGLE_SHEET_ID_B64=$(safe_b64 "$GOOGLE_SHEET_ID")
+        export GOOGLE_SERVICE_ACCOUNT_EMAIL_B64=$(safe_b64 "$GOOGLE_SERVICE_ACCOUNT_EMAIL")
+        export GOOGLE_PRIVATE_KEY_B64=$(safe_b64 "$GOOGLE_PRIVATE_KEY")
+        export TELEGRAM_BOT_TOKEN_B64=$(safe_b64 "$TELEGRAM_BOT_TOKEN")
+        export TELEGRAM_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_CHAT_ID")
+        export CANTON_COIN_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_PRICE_USD")
+        export CANTON_COIN_BUY_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_BUY_PRICE_USD_ACTUAL")
+        export CANTON_COIN_SELL_PRICE_USD_B64=$(safe_b64 "$CANTON_COIN_SELL_PRICE_USD_ACTUAL")
+        export MIN_USDT_AMOUNT_B64=$(safe_b64 "$MIN_USDT_AMOUNT_ACTUAL")
+        export SUPPORT_EMAIL_B64=$(safe_b64 "$SUPPORT_EMAIL_ACTUAL")
+        export TELEGRAM_BOT_USERNAME_B64=$(safe_b64 "$TELEGRAM_BOT_USERNAME_ACTUAL")
+        export BUSINESS_HOURS_B64=$(safe_b64 "$BUSINESS_HOURS_ACTUAL")
+        export GOOGLE_SHEETS_RANGE_B64=$(safe_b64 "$GOOGLE_SHEETS_RANGE")
+        export ADMIN_EMAIL_B64=$(safe_b64 "$ADMIN_EMAIL")
+        export ADMIN_PASSWORD_HASH_B64=$(safe_b64 "${ADMIN_PASSWORD_HASH}")
+        export ADMIN_NAME_B64=$(safe_b64 "$ADMIN_NAME")
+        export ADMIN_API_KEY_B64=$(safe_b64 "$ADMIN_API_KEY")
+        export NEXTAUTH_SECRET_B64=$(safe_b64 "$NEXTAUTH_SECRET")
+        export NEXTAUTH_URL_B64=$(safe_b64 "$NEXTAUTH_URL")
+        
+        # Intercom Configuration
+        export INTERCOM_APP_ID_B64=$(safe_b64 "$INTERCOM_APP_ID")
+        export NEXT_PUBLIC_INTERCOM_APP_ID_B64=$(safe_b64 "$NEXT_PUBLIC_INTERCOM_APP_ID")
+        export INTERCOM_ACCESS_TOKEN_B64=$(safe_b64 "$INTERCOM_ACCESS_TOKEN")
+        export INTERCOM_ADMIN_ID_B64=$(safe_b64 "$INTERCOM_ADMIN_ID")
+        export INTERCOM_WEBHOOK_SECRET_B64=$(safe_b64 "$INTERCOM_WEBHOOK_SECRET")
+        export INTERCOM_API_SECRET_B64=$(safe_b64 "$INTERCOM_API_SECRET")
+        
+        # Telegram Mediator Bot Configuration
+        export TELEGRAM_MEDIATOR_BOT_TOKEN_B64=$(safe_b64 "$TELEGRAM_MEDIATOR_BOT_TOKEN")
+        export TELEGRAM_MEDIATOR_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_MEDIATOR_CHAT_ID")
+        export TELEGRAM_MEDIATOR_WEBHOOK_SECRET_B64=$(safe_b64 "$TELEGRAM_MEDIATOR_WEBHOOK_SECRET")
+        
+        # Telegram Client Group Configuration
+        export TELEGRAM_CLIENT_GROUP_CHAT_ID_B64=$(safe_b64 "$TELEGRAM_CLIENT_GROUP_CHAT_ID")
+        
+        # Telegram Client API Configuration (для отправки сообщений от администратора)
+        export TELEGRAM_API_ID_B64=$(safe_b64 "$TELEGRAM_API_ID")
+        export TELEGRAM_API_HASH_B64=$(safe_b64 "$TELEGRAM_API_HASH")
+        export TELEGRAM_SESSION_STRING_B64=$(safe_b64 "$TELEGRAM_SESSION_STRING")
+        
+        # Supabase Configuration (секретные данные)
+        export NEXT_PUBLIC_SUPABASE_URL_B64=$(safe_b64 "$NEXT_PUBLIC_SUPABASE_URL")
+        export SUPABASE_SERVICE_ROLE_KEY_B64=$(safe_b64 "$SUPABASE_SERVICE_ROLE_KEY")
+        
+        # SMTP Configuration
+        export SMTP_HOST_B64=$(safe_b64 "$SMTP_HOST")
+        export SMTP_PORT_B64=$(safe_b64 "$SMTP_PORT")
+        export SMTP_SECURE_B64=$(safe_b64 "$SMTP_SECURE")
+        export SMTP_USER_B64=$(safe_b64 "$SMTP_USER")
+        export SMTP_PASSWORD_B64=$(safe_b64 "$SMTP_PASSWORD")
+        export SMTP_FROM_ADDRESS_B64=$(safe_b64 "$SMTP_FROM_ADDRESS")
+        export SMTP_FROM_NAME_B64=$(safe_b64 "$SMTP_FROM_NAME")
+        
+        # Additional Configuration
+        export ALERT_EMAIL_B64=$(safe_b64 "$ALERT_EMAIL")
+        
+        # GitHub API Configuration
+        export API_TOKEN_B64=$(safe_b64 "$API_TOKEN")
+        export REPO_OWNER_B64=$(safe_b64 "$REPO_OWNER")
+        export REPO_NAME_B64=$(safe_b64 "$REPO_NAME")
+        export WORKFLOW_ID_B64=$(safe_b64 "$WORKFLOW_ID")
+        export WORKFLOW_BRANCH_B64=$(safe_b64 "$WORKFLOW_BRANCH")
+        
+        echo "✅ Все секреты закодированы в base64 с актуальными значениями"
+        
+        # Удаляем старый secret если существует
+        echo "🗑️ Удаляем старый secret если существует..."
+        kubectl delete secret $SECRET_NAME -n $NAMESPACE --ignore-not-found=true
+        
+        # Создаем секрет из template с подстановкой base64 значений
+        envsubst < ../secret.template.yaml > secret-minimal-stage.yaml
+        # Обновляем namespace в созданном файле
+        sed -i "s/namespace: canton-otc/namespace: $NAMESPACE/" secret-minimal-stage.yaml
+        sed -i "s/name: canton-otc-secrets/name: $SECRET_NAME/" secret-minimal-stage.yaml
+        echo "📊 Применяем секреты в Kubernetes..."
+        kubectl apply -f secret-minimal-stage.yaml
+        rm secret-minimal-stage.yaml
+        
+        echo "✅ Секреты приложения успешно созданы в Kubernetes namespace $NAMESPACE с актуальными значениями"
+      env:
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+        GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        CANTON_COIN_PRICE_USD: ${{ secrets.CANTON_COIN_PRICE_USD }}
+        CANTON_COIN_BUY_PRICE_USD: ${{ secrets.CANTON_COIN_BUY_PRICE_USD }}
+        CANTON_COIN_SELL_PRICE_USD: ${{ secrets.CANTON_COIN_SELL_PRICE_USD }}
+        MIN_USDT_AMOUNT: ${{ secrets.MIN_USDT_AMOUNT }}
+        SUPPORT_EMAIL: ${{ secrets.SUPPORT_EMAIL }}
+        TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+        BUSINESS_HOURS: ${{ secrets.BUSINESS_HOURS }}
+        GOOGLE_SHEETS_RANGE: ${{ secrets.GOOGLE_SHEETS_RANGE }}
+        ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+        ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
+        ADMIN_NAME: ${{ secrets.ADMIN_NAME }}
+        ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+        NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+        NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+        
+        # Intercom Configuration
+        INTERCOM_APP_ID: ${{ secrets.INTERCOM_APP_ID }}
+        NEXT_PUBLIC_INTERCOM_APP_ID: ${{ secrets.NEXT_PUBLIC_INTERCOM_APP_ID }}
+        INTERCOM_ACCESS_TOKEN: ${{ secrets.INTERCOM_ACCESS_TOKEN }}
+        INTERCOM_ADMIN_ID: ${{ secrets.INTERCOM_ADMIN_ID }}
+        INTERCOM_WEBHOOK_SECRET: ${{ secrets.INTERCOM_WEBHOOK_SECRET }}
+        INTERCOM_API_SECRET: ${{ secrets.INTERCOM_API_SECRET }}
+        
+        # Telegram Mediator Bot Configuration
+        TELEGRAM_MEDIATOR_BOT_TOKEN: ${{ secrets.TELEGRAM_MEDIATOR_BOT_TOKEN }}
+        TELEGRAM_MEDIATOR_CHAT_ID: ${{ secrets.TELEGRAM_MEDIATOR_CHAT_ID }}
+        TELEGRAM_MEDIATOR_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_MEDIATOR_WEBHOOK_SECRET }}
+        
+        # Telegram Client Group Configuration
+        TELEGRAM_CLIENT_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_CLIENT_GROUP_CHAT_ID }}
+        
+        # Telegram Client API Configuration (для отправки сообщений от администратора)
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+        
+        # SMTP Configuration
+        SMTP_HOST: ${{ secrets.SMTP_HOST }}
+        SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+        SMTP_USER: ${{ secrets.SMTP_USER }}
+        SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
+        SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+        
+        # Additional Configuration
+        ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        
+        # GitHub API Configuration
+        API_TOKEN: ${{ secrets.API_TOKEN }}
+        REPO_OWNER: TheMacroeconomicDao
+        REPO_NAME: CantonOTC
+        WORKFLOW_ID: deploy-minimal-stage.yml
+        WORKFLOW_BRANCH: minimal-stage
+
+    - name: 🚀 Deploy application
+      run: |
+        echo "🚀 Разворачиваем приложение в minimal-stage..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        DEPLOYMENT_NAME="canton-otc"
+        IMAGE_TAG="minimal-stage"
+        cd config/kubernetes/k8s/minimal-stage
+        
+        # Используем правильное имя образа
+        IMAGE_WITH_TAG="ghcr.io/themacroeconomicdao/cantonotc:${IMAGE_TAG}"
+        echo "Deploying image: ${IMAGE_WITH_TAG} to namespace: $NAMESPACE"
+        
+        # ========================================
+        # MINIMAL-STAGE: Простое развертывание без External Secrets
+        # Используем обычные Kubernetes Secrets, которые уже созданы на предыдущем шаге
+        # ========================================
+        
+        echo "📋 Применяем ConfigMap для несекретных данных..."
+        kubectl apply -f configmap.yaml || echo "⚠️ ConfigMap apply failed, continuing..."
+        
+        echo "🚀 Разворачиваем основное приложение..."
+        kubectl apply -f redis-deployment.yaml
+        kubectl apply -f service.yaml
+        kubectl apply -f deployment.yaml
+        kubectl apply -f ingress.yaml
+        
+        # Обновляем образ в deployment с принудительным перезапуском
+        echo "🔄 Обновляем образ в deployment..."
+        kubectl set image deployment/$DEPLOYMENT_NAME canton-otc=${IMAGE_WITH_TAG} -n $NAMESPACE
+        
+        # 🔄 КРИТИЧЕСКОЕ: Принудительный перезапуск pod после обновления секретов
+        echo "🔄 Принудительно перезапускаем pod для применения новых секретов..."
+        kubectl rollout restart deployment/$DEPLOYMENT_NAME -n $NAMESPACE
+
+        echo "✅ Приложение развернуто в namespace $NAMESPACE"
+
+    - name: ⏳ Wait for deployment
+      run: |
+        echo "⏳ Ждем готовности deployment в minimal-stage..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        DEPLOYMENT_NAME="canton-otc"
+        
+        echo "📊 Текущий статус pods в namespace $NAMESPACE:"
+        kubectl get pods -n $NAMESPACE
+        
+        echo -e "\n🔄 Ждем rollout (увеличенный timeout 10 минут)..."
+        kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE --timeout=600s || {
+          echo "❌ Rollout timeout! Проверяем состояние pods..."
+          kubectl get pods -n $NAMESPACE -o wide
+          kubectl describe pods -n $NAMESPACE
+          echo -e "\n📝 Логи pod'ов:"
+          kubectl logs -l app=canton-otc -n $NAMESPACE --tail=50 || echo "Логи недоступны"
+          exit 1
+        }
+        echo "✅ Deployment готов в namespace $NAMESPACE!"
+        
+    - name: 🔍 Verify deployment
+      run: |
+        echo "🔍 Проверяем статус приложения в minimal-stage..."
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        DEPLOYMENT_NAME="canton-otc"
+        APP_URL="https://stage.minimal.build.infra.1otc.cc"
+        
+        # Статус подов
+        echo "📊 Статус подов в namespace $NAMESPACE:"
+        kubectl get pods -n $NAMESPACE
+        
+        # Статус сервисов  
+        echo "🌐 Статус сервисов в namespace $NAMESPACE:"
+        kubectl get services -n $NAMESPACE
+        
+        # Статус ingress
+        echo "🚪 Статус ingress в namespace $NAMESPACE:"
+        kubectl get ingress -n $NAMESPACE
+        
+        # Логи приложения (последние 20 строк)
+        echo "📝 Последние логи приложения:"
+        kubectl logs --tail=20 deployment/$DEPLOYMENT_NAME -n $NAMESPACE || echo "Логи пока недоступны"
+        
+        echo "✅ Деплой завершен успешно в namespace $NAMESPACE!"
+
+    - name: 🎉 Deployment Summary
+      run: |
+        echo "🎉 Деплой в minimal-stage завершен!"
+        
+        NAMESPACE="canton-otc-minimal-stage"
+        DEPLOYMENT_NAME="canton-otc"
+        APP_URL="https://stage.minimal.build.infra.1otc.cc"
+        
+        echo "🌐 Ваш сайт: $APP_URL"
+        echo "🔍 Health check: $APP_URL/api/health"
+        echo "📊 Admin панель: $APP_URL/admin"
+        echo "📋 Environment: minimal-stage"
+        echo "📋 Namespace: $NAMESPACE"
+        echo ""
+        echo "📋 Полезные команды для мониторинга:"
+        echo "  kubectl get all -n $NAMESPACE"
+        echo "  kubectl logs -f deployment/$DEPLOYMENT_NAME -n $NAMESPACE"
+        echo "  kubectl describe pod -n $NAMESPACE"

@@ -1,0 +1,44 @@
+-- Treasury.YieldDistribution (05_DAML_CONTRACTS_SPEC §3.3)
+module Treasury.YieldDistribution where
+
+import Common.Types
+
+-- Yield payment record
+template YieldPayment
+  with
+    tokenId: Text
+    recipient: Party
+    amount: Decimal
+    distributionDate: Date
+    status: TxStatus
+  where
+    signatory recipient
+
+    -- Claim yield payment (consuming: archive old, create CONFIRMED)
+    consuming choice ClaimYield : ContractId YieldPayment
+      with
+        bankAccount: Text
+      controller recipient
+      do
+        create this with status = CONFIRMED
+
+-- Redemption receipt
+template RedemptionReceipt
+  with
+    tokenId: Text
+    redeemer: Party
+    amount: Decimal
+    redemptionDate: Date
+    status: TxStatus
+  where
+    signatory redeemer
+
+-- Redemption request
+template RedemptionRequest
+  with
+    tokenId: Text
+    requester: Party
+    amount: Decimal
+    status: TxStatus
+  where
+    signatory requester

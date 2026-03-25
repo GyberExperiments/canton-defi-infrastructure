@@ -1,0 +1,111 @@
+# ConfigMap для несекретных данных Canton OTC Exchange (Production)
+# Содержит цены, лимиты, настройки бизнеса и другие публичные конфигурации
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-otc-config
+  namespace: canton-otc
+  labels:
+    app: canton-otc
+    environment: production
+    managed-by: external-secrets
+data:
+  # ========================================
+  # ЦЕНЫ CANTON COIN (НЕСЕКРЕТНЫЕ ДАННЫЕ)
+  # ========================================
+  # Статичные цены (используются если USE_DYNAMIC_PRICING=false или как fallback)
+  CANTON_COIN_BUY_PRICE_USD: "0.77"
+  CANTON_COIN_SELL_PRICE_USD: "0.22"
+  CANTON_COIN_PRICE_USD: "-" # Legacy поле, не используется
+  
+  # Динамическое ценообразование на основе рыночной цены из API
+  USE_DYNAMIC_PRICING: "true" # Включить использование рыночной цены из API (true/false)
+  BUY_MARKUP_PERCENT: "5" # Процент наценки при покупке (прибавляется к рыночной цене, например 5 = +5%)
+  SELL_MARKUP_PERCENT: "3" # Процент наценки при продаже (вычитается из рыночной цены, например 3 = -3%)
+  
+  # ========================================
+  # ЛИМИТЫ И НАСТРОЙКИ
+  # ========================================
+  MIN_USDT_AMOUNT: "1"
+  MAX_USDT_AMOUNT: "" # Пустое значение = без лимита
+  MIN_CANTON_AMOUNT: "4"
+  MAX_CANTON_AMOUNT: "" # Пустое значение = без лимита
+  
+  # ========================================
+  # НАСТРОЙКИ БИЗНЕСА
+  # ========================================
+  BUSINESS_HOURS: "8:00 AM - 10:00 PM (GMT+8)"
+  SUPPORT_EMAIL: "support@1otc.cc"
+  TELEGRAM_BOT_USERNAME: "@CantonOTC_Bot"
+  TELEGRAM_OPERATOR_USERNAME: "@hypov"  # Username оператора для публичных заявок
+  TELEGRAM_SERVICE_BOT_USERNAME: "@TECH_HY_Customer_Service_bot"  # Сервисный бот для связи с клиентами
+  
+  # ========================================
+  # НАСТРОЙКИ GOOGLE SHEETS
+  # ========================================
+  GOOGLE_SHEET_NAME: "Лист1"  # Название листа в Google Таблице
+  
+  # ========================================
+  # НАСТРОЙКИ ПРИЛОЖЕНИЯ
+  # ========================================
+  NODE_ENV: "production"
+  NEXT_PUBLIC_APP_URL: "https://1otc.cc"
+  
+  # ========================================
+  # НАСТРОЙКИ REDIS
+  # ========================================
+  REDIS_URL: "redis://redis:6379"
+  
+  # ========================================
+  # НАСТРОЙКИ EMAIL СЕРВИСА
+  # ========================================
+  EMAIL_SERVICE_ENABLED: "true"
+  
+  # ========================================
+  # НАСТРОЙКИ TELEGRAM СЕРВИСА
+  # ========================================
+  TELEGRAM_SERVICE_ENABLED: "true"
+  
+  # ========================================
+  # НАСТРОЙКИ АНТИ-СПАМ
+  # ========================================
+  SPAM_DETECTION_ENABLED: "true"
+  MAX_ORDERS_PER_IP_PER_HOUR: "10"
+  DUPLICATE_AMOUNT_WINDOW_MINUTES: "5"
+  
+  # ========================================
+  # НАСТРОЙКИ МОНИТОРИНГА
+  # ========================================
+  MONITORING_ENABLED: "true"
+  
+  # ========================================
+  # НАСТРОЙКИ AUTH
+  # ========================================
+  AUTH_TRUST_HOST: "true"
+  AUTH_URL: "https://1otc.cc"
+  
+  # ========================================
+  # НАСТРОЙКИ GITHUB API
+  # ========================================
+  REPO_OWNER: "TheMacroeconomicDao"
+  REPO_NAME: "CantonOTC"
+  WORKFLOW_ID: "deploy.yml"
+  WORKFLOW_BRANCH: "main"
+  
+  # ========================================
+  # НАСТРОЙКИ KUBERNETES
+  # ========================================
+  K8S_NAMESPACE: "canton-otc"
+  K8S_CONFIGMAP_NAME: "canton-otc-config"
+  
+  # ========================================
+  # NEAR INTENTS КОНФИГУРАЦИЯ (НЕСЕКРЕТНЫЕ)
+  # ========================================
+  NEXT_PUBLIC_NEAR_NETWORK: "mainnet"  # или "testnet" для тестирования
+  NEAR_INTENTS_VERIFIER_CONTRACT: "verifier.mainnet"  # ⚠️ Получить актуальный адрес от NEAR Intents
+  NEAR_RPC_URL: "https://rpc.mainnet.near.org"
+  NEAR_ARCHIVAL_RPC_URL: "https://archival-rpc.mainnet.near.org"
+  NEAR_WALLET_URL: "https://wallet.near.org"
+  # NEAR_DEX_FEE_RECIPIENT перемещен в секреты (GitHub Secrets -> External Secrets -> Kubernetes Secret)
+
